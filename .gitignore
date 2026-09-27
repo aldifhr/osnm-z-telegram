@@ -1,5 +1,15 @@
-/target/
-/contracts/cache/
-/contracts/out/
 .env
-/wallets.json
+.env.*
+!.env.example
+/do not delete.md
+.DS_Store
+Desktop.ini
+Thumbs.db
+.ruff_cache/
+.mypy_cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/

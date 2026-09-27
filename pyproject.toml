@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "osnm-z"
+version = "0.1.0"
+description = "Fast ERC-721 OpenSea minting for one wallet and one selected phase"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "MIT"
+classifiers = [
+  "Environment :: Console",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  # eth-keys selects coincurve for native signing even without a direct import here.
+  "coincurve==21.0.0",
+  "eth-abi==5.2.0",
+  "eth-account==0.13.7",
+  "eth-typing==6.0.0",
+  "eth-utils==6.0.0",
+  "httpx[http2]==0.28.1",
+  "orjson==3.11.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "hatchling==1.32.0",
+  "mypy==2.3.1",
+  "pip-audit==2.10.1",
+  "ruff==0.16.0",
+  "vulture==2.16",
+]
+
+[project.scripts]
+osnm-z = "osnm_z.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/osnm_z"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/osnm_z/**/*.py",
+  "assets/osnm-z.svg",
+  ".env.example",
+  "README.md",
+  "LICENSE",
+  "pyproject.toml",
+  "uv.lock",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_redundant_casts = true
+warn_unreachable = true
+warn_unused_configs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "RUF", "ERA"]
+ignore = ["S101"]
+
+[tool.vulture]
+min_confidence = 60
+paths = ["src"]
+sort_by_size = true

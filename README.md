@@ -1,365 +1,412 @@
-<table width="100%">
+<table align="center">
   <tr>
-    <td align="left" width="120">
+    <td align="center" width="120">
       <img src="assets/osnm-z.svg" alt="OSNM-Z Mint Bot logo" width="100" />
     </td>
-    <td align="right">
+    <td align="center">
       <h1>OSNM-Z</h1>
-      <h3>Single and multi-wallet Rust CLI for OpenSea-hosted mints</h3>
+      <h3>Single-wallet Python CLI for OpenSea NFT mints</h3>
     </td>
   </tr>
 </table>
 
----
+A Python CLI tool for minting ERC-721 NFTs from OpenSea SeaDrop collections. Each
+run uses **one wallet and one selected phase**, supporting public sales, signed
+allowlists, and Merkle allowlists. The configured wallet pays for the mint and gas
+and receives the NFTs.
 
-<h2 align="center">Overview</h2>
+<h2 align="center">Installation</h2>
 
-OSNM-Z is a cross-platform Rust minting CLI for OpenSea-hosted SeaDrop NFT collections on OpenSea-supported EVM chains matching the configured RPC. It discovers the collection, authenticates each configured wallet, verifies eligibility, and supports one or more allowlist (WL), first-come-first-served (FCFS), and public phases. Users can mint in **single-wallet mode** or **multiple-wallet mode**, execute concurrent **self-funded multi-wallet** mints, sponsor multi-wallet gas through **EIP-7702 sponsored mode** on compatible chains, and fund up to 10 self-funded manifest wallets atomically in one verified Multicall3 transaction when the canonical deployment is available. Multi-phase selections execute sequentially by start time, and `SPONSORED=true` deliberately selects `WALLETS_FILE` when both wallet sources are configured.
+The sections below cover the major operating systems and commonly used terminals:
+Windows with PowerShell or Command Prompt, Linux with Bash, and macOS with Zsh or
+Bash. Follow the section for your operating system and terminal, completing each
+step in order.
 
-```mermaid
-flowchart TD
-    CLI["OSNM-Z mint session"] --> SINGLE["Single wallet<br/>WALLET_KEY"]
-    CLI --> MULTI["Multi wallet<br/>WALLETS_FILE"]
+<h3 align="center">Windows</h3>
 
-    SINGLE --> S1["Authenticate one wallet<br/>and load its eligibility"]
-    S1 --> S2["Select one or more phases<br/>active or scheduled"]
-    S2 --> S3["T-10: capture nonce, fees, balance,<br/>metadata, eligibility, and local funding"]
-    S3 --> S4["T-2: fetch and validate<br/>wallet-specific calldata"]
-    S4 --> S5["Wallet signs and submits<br/>its own EIP-1559 mint transaction"]
-    S5 --> S6["Wallet pays mint value and gas<br/>NFT remains in that wallet"]
+<h4 align="center">PowerShell</h4>
 
-    MULTI --> SPONSORED["Sponsored EIP-7702<br/>maximum 25 wallets"]
-    MULTI --> SELF["Self-funded concurrent mint<br/>maximum 10 wallets"]
+1. Open Windows PowerShell 5.1 or PowerShell 7 and check whether Git is installed:
 
-    SPONSORED --> P1["Verify live EIP-7702 and EIP-1153<br/>and exact executor runtime"]
-    P1 --> P2["Authenticate every wallet<br/>and keep only eligible candidates"]
-    P2 --> P3["T-15: capture account state and fees<br/>sign new or replacement delegations when required"]
-    P3 --> P4["T-2: fetch all wallet actions<br/>in one aliased GraphQL request"]
-    P4 --> P5["Validate each action and sign an exact<br/>wallet EIP-712 mint operation"]
-    P5 --> P6["Each wallet pays its signed mint value<br/>sponsor pays the complete outer gas"]
-    P6 --> P7["Executor isolates each wallet call<br/>and verifies the expected safe mint"]
-    P7 --> P8["Successful NFTs are forwarded atomically<br/>to the configured recipient"]
-    P7 --> P9["Failed or skipped wallets retain their mint value<br/>without undoing other wallet successes"]
-    P8 --> P10["Delegation remains active<br/>run opensea-mint mint --undelegate afterward"]
-    P9 --> P10
+   ```powershell
+   git --version
+   ```
 
-    SELF --> F1["Authenticate every wallet<br/>and keep only eligible candidates"]
-    F1 --> F2["During setup: calculate captured mint value when available,<br/>maximum gas, fees, and balance locally"]
-    F2 --> F3["Prompt to top up, recheck, or skip<br/>each underfunded wallet"]
-    F3 --> F3A["T-10: refresh nonce, fees, and balance<br/>with a non-interactive safety recheck"]
-    F3A --> F4["T-2: fetch all wallet actions<br/>in one aliased GraphQL request"]
-    F4 --> F5["Validate actions, then execute wallets<br/>concurrently and independently"]
-    F5 --> F6["Each wallet signs, pays mint value,<br/>and pays its own EIP-1559 gas"]
-    F6 --> F7["Verify each successful mint receipt<br/>and extract the minted NFT assets"]
-    F7 --> F8["If needed, that wallet signs and pays<br/>a separate safe-transfer transaction"]
-    F8 --> F9["NFT reaches the configured recipient<br/>failures do not stop other wallets"]
-```
+2. If Git is unavailable, install it with WinGet:
 
-| Wallet mode | Who pays? | Transactions | NFT destination | Failure boundary |
-| --- | --- | --- | --- | --- |
-| **Single wallet**<br/>`WALLET_KEY` | The configured wallet pays its mint value and gas | One independently signed mint transaction per selected phase | Remains in the configured wallet | That wallet and phase only |
-| **Multiple wallets: sponsored EIP-7702**<br/>`WALLETS_FILE` + `SPONSORED=true` | Each manifest wallet pays its own mint value; `SPONSOR_KEY` pays the complete batch gas | One executor batch per selected phase, carrying authorizations for wallets that need a new or replacement delegation | Forwarded atomically to `RECIPIENT_ADDRESS`, or the sponsor fallback | One wallet can fail without stopping the others; outer execution failure reverts contract execution and value movement, but processed delegations may persist |
-| **Multiple wallets: self-funded concurrent**<br/>`WALLETS_FILE` + `SPONSORED=false` | Every manifest wallet pays its own mint value, mint gas, and forwarding gas | Independent wallet transactions run concurrently, followed by safe-transfer transactions when the recipient differs | Forwarded after receipt verification to `RECIPIENT_ADDRESS`, or the sponsor fallback | Each wallet succeeds or fails independently |
+   ```powershell
+   winget install --id Git.Git -e --source winget
+   ```
 
-The integrated [`SponsoredMintExecutor`](contracts/README.md) is used only by **sponsored EIP-7702 mode**. **Self-funded multi-wallet mode** does not delegate wallets or call the executor. Its interactive funding and top-up gate runs during setup, before approval or scheduling. T-10 and final pre-signing checks are non-interactive safety rechecks; a wallet is skipped only if its balance or required cost became insufficient after setup. EIP-7702 delegation can remain after success or failure, so sponsored users must run `opensea-mint mint --undelegate` and verify revocation.
+   For manual installation, download and run the
+   [official Git for Windows installer](https://git-scm.com/install/windows).
+   Close and reopen PowerShell after installing Git, then run `git --version` again.
 
-> [!IMPORTANT]
-> `SPONSORED=true` sponsors the on-chain transaction gas only. Every eligible wallet must hold `eligible mint price × its configured quantity`, plus the local OpenSea action-construction reserve calculated as `GAS_LIMIT × maximum configured fee per gas`. OpenSea may reject wallet-specific calldata construction without that reserve even for a free sponsored mint. The executor spends only the validated mint value from the wallet, so the unused reserve remains there; the sponsor pays EIP-7702 authorization processing, batch execution, mint-call gas, NFT verification, and forwarding gas. Setup verifies both balances before approval.
+3. Install uv:
 
-> [!CAUTION]
-> This project uses OpenSea's private, unstable web API and trusts opaque transaction data returned by OpenSea. It is experimental and high risk. Use only dedicated wallets funded with the amount required for the intended mint.
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
 
----
+4. Close and reopen PowerShell, then confirm that uv is available:
 
-<h2 align="center">Quick Start</h2>
+   ```powershell
+   uv --version
+   ```
 
-### 1. Installation
+5. Clone the repository:
 
-The repository requires Git, Rust, and a native C/C++ compiler. Clone and compile it on the operating system where it will run.
+   ```powershell
+   git clone https://github.com/zunmax/osnm-z.git
+   ```
 
-#### **Windows**
+6. Enter the cloned project directory:
 
-Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with **Desktop development with C++**, [Git for Windows](https://git-scm.com/downloads/win), and [Rust](https://www.rust-lang.org/tools/install). Reopen PowerShell, then run:
+   ```powershell
+   Set-Location -LiteralPath '.\osnm-z'
+   ```
 
-```powershell
-git clone https://github.com/zunmax/osnm-z.git
-Set-Location osnm-z
-cargo install --path . --locked
-opensea-mint --version
-```
+7. Install Python 3.12 through uv:
 
-#### **Linux or WSL**
+   ```powershell
+   uv python install 3.12
+   ```
 
-Install the prerequisites for the distribution:
+8. Create the project environment from the locked dependencies:
 
-**Ubuntu or Debian:**
+   ```powershell
+   uv sync --frozen --python 3.12
+   ```
 
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential curl ca-certificates git
-```
+9. Create your private configuration file:
 
-**Fedora or RHEL:**
+   ```powershell
+   Copy-Item -LiteralPath '.env.example' -Destination '.env'
+   ```
 
-```bash
-sudo dnf install -y gcc gcc-c++ make curl ca-certificates git
-```
+10. Open the configuration file in Notepad:
 
-**Arch Linux:**
+    ```powershell
+    notepad.exe .env
+    ```
 
-```bash
-sudo pacman -S --needed base-devel curl ca-certificates git
-```
+    Follow [Wallet setup](#wallet-setup) to fill in the required values and save the file.
 
-Install Rust, clone the repository, and install the CLI:
+<h4 align="center">Command Prompt (CMD)</h4>
 
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-git clone https://github.com/zunmax/osnm-z.git
-cd osnm-z
-cargo install --path . --locked
-opensea-mint --version
-```
+1. Open Command Prompt and check whether Git is installed:
 
-#### **macOS**
+   ```bat
+   git --version
+   ```
 
-Install Apple's command-line developer tools, then install Rust and the CLI:
+2. If Git is unavailable, install it with WinGet:
 
-```bash
-xcode-select --install
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-git clone https://github.com/zunmax/osnm-z.git
-cd osnm-z
-cargo install --path . --locked
-opensea-mint --version
-```
+   ```bat
+   winget install --id Git.Git -e --source winget
+   ```
 
-### 2. Set Up `.env` and `wallets.json`
+   For manual installation, download and run the
+   [official Git for Windows installer](https://git-scm.com/install/windows).
+   Close and reopen Command Prompt after installing Git, then run `git --version` again.
 
-Create the active environment file:
+3. Install uv through Windows PowerShell:
 
-```powershell
-# Windows PowerShell
-Copy-Item .env.example .env
-```
+   ```bat
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
 
-```bash
-# Linux or macOS
-cp .env.example .env
-```
+4. Close and reopen Command Prompt, then confirm that uv is available:
 
-Keep the shared settings and select one wallet mode.
+   ```bat
+   uv --version
+   ```
+
+5. Clone the repository:
+
+   ```bat
+   git clone https://github.com/zunmax/osnm-z.git
+   ```
+
+6. Enter the cloned project directory:
+
+   ```bat
+   cd /d "osnm-z"
+   ```
+
+7. Install Python 3.12 through uv:
+
+   ```bat
+   uv python install 3.12
+   ```
+
+8. Create the project environment from the locked dependencies:
+
+   ```bat
+   uv sync --frozen --python 3.12
+   ```
+
+9. Create your private configuration file:
+
+   ```bat
+   copy ".env.example" ".env"
+   ```
+
+10. Open the configuration file in Notepad:
+
+    ```bat
+    notepad.exe .env
+    ```
+
+    Follow [Wallet setup](#wallet-setup) to fill in the required values and save the file.
+
+<h3 align="center">Linux</h3>
+
+1. Open a Bash terminal and check whether Git is installed:
+
+   ```bash
+   git --version
+   ```
+
+2. If Git is unavailable, follow the instructions for your distribution.
+
+   On Debian or Ubuntu, update the package index:
+
+   ```bash
+   sudo apt update
+   ```
+
+   Then install Git:
+
+   ```bash
+   sudo apt install git
+   ```
+
+   On Fedora, install Git with DNF instead:
+
+   ```bash
+   sudo dnf install git
+   ```
+
+   For other distributions or manual installation, follow the
+   [official Git for Linux instructions](https://git-scm.com/install/linux).
+   After installing Git, run `git --version` again.
+
+3. Install uv:
+
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+   If `curl` is unavailable, install uv with `wget` instead:
+
+   ```bash
+   wget -qO- https://astral.sh/uv/install.sh | sh
+   ```
+
+4. Close and reopen the terminal, then confirm that uv is available:
+
+   ```bash
+   uv --version
+   ```
+
+5. Clone the repository:
+
+   ```bash
+   git clone https://github.com/zunmax/osnm-z.git
+   ```
+
+6. Enter the cloned project directory:
+
+   ```bash
+   cd osnm-z
+   ```
+
+7. Install Python 3.12 through uv:
+
+   ```bash
+   uv python install 3.12
+   ```
+
+8. Create the project environment from the locked dependencies:
+
+   ```bash
+   uv sync --frozen --python 3.12
+   ```
+
+9. Create your private configuration file:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+10. Open `.env` in your preferred plain-text editor, then follow
+    [Wallet setup](#wallet-setup).
+
+<h3 align="center">macOS</h3>
+
+1. Open Terminal using Zsh or Bash and check whether Git is installed:
+
+   ```sh
+   git --version
+   ```
+
+2. If Git is unavailable, install Apple's Command Line Tools, which include Git:
+
+   ```sh
+   xcode-select --install
+   ```
+
+   For manual installation or other package-manager options, follow the
+   [official Git for macOS instructions](https://git-scm.com/install/mac).
+   After installing Git, run `git --version` again.
+
+3. Install uv:
+
+   ```sh
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+4. Close and reopen Terminal, then confirm that uv is available:
+
+   ```sh
+   uv --version
+   ```
+
+5. Clone the repository:
+
+   ```sh
+   git clone https://github.com/zunmax/osnm-z.git
+   ```
+
+6. Enter the cloned project directory:
+
+   ```sh
+   cd osnm-z
+   ```
+
+7. Install Python 3.12 through uv:
+
+   ```sh
+   uv python install 3.12
+   ```
+
+8. Create the project environment from the locked dependencies:
+
+   ```sh
+   uv sync --frozen --python 3.12
+   ```
+
+9. Create your private configuration file:
+
+   ```sh
+   cp .env.example .env
+   ```
+
+10. Open `.env` in your preferred plain-text editor and follow [Wallet setup](#wallet-setup).
+
+<h2 id="wallet-setup" align="center">Wallet setup</h2>
+
+The setup commands copy [`.env.example`](.env.example) to `.env`. Run the copy
+command only during first-time setup so an existing `.env` is not overwritten.
+Edit `.env`, set the required values, and save it before running the tool:
 
 ```dotenv
+WALLET_KEY=0x<64-hex-character-private-key>
 RPC_URL=https://your-chain-rpc.example
 FEE_AUTOMATIC=true
 GAS_LIMIT=300000
 ```
 
-**Single-wallet mode:**
+Replace the wallet and RPC placeholders. Keep your private key and `.env` private.
+`GAS_LIMIT=300000` is an example; choose a limit suitable for the mint. The tool
+does not estimate gas during submission.
 
-```dotenv
-WALLET_KEY=0x<64-hex-character-private-key>
+<h2 align="center">Usage</h2>
+
+These commands work in Windows PowerShell 5.1, PowerShell 7, Command Prompt,
+Linux Bash, and macOS Zsh or Bash. Run them from the `osnm-z` directory.
+`uv run` uses the project's environment; manual activation is not required.
+
+Check configuration, wallet signer loading, and RPC readiness:
+
+```console
+uv run --frozen osnm-z doctor
 ```
 
-**Multiple-wallet mode: self-funded:**
+`doctor` does not submit a transaction. OpenSea wallet authentication and collection
+eligibility are checked during mint setup.
 
-```text
-opensea-mint wallets create --count 10 --quantity 1 --output wallets.json
+Start an interactive mint:
+
+```console
+uv run --frozen osnm-z mint
 ```
 
-```dotenv
-# Remove or comment WALLET_KEY from the copied example.
-WALLETS_FILE=wallets.json
-SPONSORED=false
-RECIPIENT_ADDRESS=0x<40-hex-character-recipient-address>
-# SPONSOR_KEY=0x<required-only-for-funding-or-recipient-fallback>
+1. Enter an OpenSea collection slug, collection or mint URL, or NFT contract address.
+2. Choose one eligible phase using its displayed option number. If the collection
+   has only one phase and it is selectable, the tool selects it automatically.
+3. Enter the quantity, or press Enter for one NFT.
+4. Keep the tool running while it prepares, waits for the selected phase if needed,
+   submits, and checks the transaction receipt.
+
+During scheduled waits, the terminal shows a live `Mint starts in 1h 23m 45s`
+countdown to the selected phase's start. Preparation and early requests can finish
+their waits before it reaches zero. Redirected logs record the remaining time once
+per wait instead of printing repeated countdown updates.
+
+Keep your system clock synchronized and avoid other transactions from the same
+wallet while minting. If the result is uncertain or unconfirmed, check the printed
+transaction hash before trying again; the tool does not automatically resend it.
+
+Show command help:
+
+```console
+uv run --frozen osnm-z --help
 ```
 
-**Multiple-wallet mode: sponsored EIP-7702:**
+Show version information:
 
-```text
-opensea-mint wallets create --count 25 --quantity 1 --output wallets.json
+```console
+uv run --frozen osnm-z --version
 ```
-
-```dotenv
-# Remove or comment WALLET_KEY from the copied example.
-WALLETS_FILE=wallets.json
-SPONSORED=true
-SPONSOR_KEY=0x<64-hex-character-sponsor-private-key>
-RECIPIENT_ADDRESS=0x<40-hex-character-recipient-address>
-# Add SPONSORED_EXECUTOR_ADDRESS after running deploy-executor.
-```
-
-```text
-opensea-mint deploy-executor
-```
-
-Copy the printed executor address into `.env` as `SPONSORED_EXECUTOR_ADDRESS=0x...`. Keep `.env` and `wallets.json` private; both contain private keys.
-
-### 3. Run the Command
-
-Validate the selected mode, then start the interactive mint session:
-
-```text
-opensea-mint doctor
-opensea-mint mint
-```
-
-If the installed command is unavailable, run the same arguments through Cargo from the repository root:
-
-```text
-cargo run --release --locked -- doctor
-cargo run --release --locked -- mint
-```
-
-To use the direct release binary, build it once. On Windows PowerShell:
-
-```powershell
-cargo build --release --locked
-.\target\release\opensea-mint.exe doctor
-.\target\release\opensea-mint.exe mint
-```
-
-On Linux or macOS:
-
-```bash
-cargo build --release --locked
-./target/release/opensea-mint doctor
-./target/release/opensea-mint mint
-```
-
----
-
-<h2 align="center">Available Commands</h2>
-
-`wallets create` does not load `.env`; help and version output also exit before configuration is loaded. All operational network commands use the active `.env`.
-
-| Command | Mode | What it does | Broadcasts? |
-| --- | --- | --- | --- |
-| `opensea-mint doctor` | All | Validates configuration, wallet input, RPC connectivity, and the active mode | No |
-| `opensea-mint deploy-executor` | **Sponsored setup** | Deploys or verifies the deterministic per-sponsor executor and prints its address | Only when deployment is needed |
-| `opensea-mint mint` | All | Opens the interactive collection, eligibility, phase, quantity, and mint flow | Yes, after confirmation |
-| `opensea-mint mint --fund <NATIVE_AMOUNT>` | **Sponsored or self-funded multi-wallet** | Sends the same native-token amount to every wallet in `wallets.json` | Yes, after confirmation |
-| `opensea-mint mint --withdraw` | **Self-funded multi-wallet** | Withdraws each wallet's safely signable native-token balance to the configured recipient | Yes, after confirmation |
-| `opensea-mint mint --undelegate` | **Multi-wallet cleanup** | Revokes EIP-7702 delegation for every manifest wallet | Yes, after confirmation |
-| `opensea-mint calldata ...` | **Read-only multi-wallet** | Authenticates wallets and fetches validated active-stage mint calldata | No |
-| `opensea-mint wallets create ...` | Local utility | Creates a new private-key manifest without loading `.env` or connecting to a network | No |
-
-### `doctor` and `deploy-executor` parameters
-
-| Command | Command-line parameters | Required configuration |
-| --- | --- | --- |
-| `opensea-mint doctor` | None | A complete **single-wallet**, **self-funded multi-wallet**, or **sponsored multi-wallet** `.env` |
-| `opensea-mint deploy-executor` | None | `RPC_URL`, `FEE_AUTOMATIC`, `GAS_LIMIT`, and `SPONSOR_KEY`; `SPONSORED_EXECUTOR_ADDRESS` is optional for this command |
-
-### `mint` parameters
-
-The three options are mutually exclusive. Running `mint` without an option starts minting.
-
-| Parameter | Value | Default | Requirements |
-| --- | --- | --- | --- |
-| `--fund <NATIVE_AMOUNT>` | Positive decimal native-token amount with up to 18 decimal places, such as `0.001` | None | `WALLETS_FILE` and `SPONSOR_KEY`; maximum 10 self-funded wallets or 25 sponsored wallets; sponsor must not be a manifest wallet |
-| `--withdraw` | Flag; no value | Off | `WALLETS_FILE` and `SPONSORED=false`; maximum 10 wallets |
-| `--undelegate` | Flag; no value | Off | `WALLETS_FILE`, `SPONSOR_KEY`, and an EIP-7702-compatible RPC |
-
-### `calldata` parameters
-
-```text
-opensea-mint calldata --collection <COLLECTION> --wallets <WALLETS> --token-id <TOKEN_ID>
-```
-
-| Parameter | Value | Default | Required? |
-| --- | --- | --- | --- |
-| `--collection <COLLECTION>` | OpenSea slug, OpenSea collection URL, or NFT contract address | None | Yes |
-| `--wallets <WALLETS>`, `-w <WALLETS>` | Path to a version-1 wallet JSON file | None | Yes |
-| `--token-id <TOKEN_ID>` | Unsigned decimal token ID; ERC-721 conventionally uses `0` | `0` | No |
-
-The read-only request supports at most 250 wallet aliases and requires one unambiguous active stage.
-
-### `wallets create` parameters
-
-```text
-opensea-mint wallets create --count <COUNT> --quantity <QUANTITY> --output <OUTPUT>
-```
-
-| Parameter | Value | Default | Requirements |
-| --- | --- | --- | --- |
-| `--count <COUNT>` | Positive integer number of wallets | `1` | Generated file must remain within 1 MiB |
-| `--quantity <QUANTITY>` | Positive integer mint quantity stored for every wallet | `1` | Final mint quantity is still limited by the selected phase |
-| `--output <OUTPUT>`, `-o <OUTPUT>` | New output file path | `wallets.json` | Existing files are never overwritten |
-
-### Help and version parameters
-
-| Parameter | Value | What it does |
-| --- | --- | --- |
-| `--help`, `-h` | No value | Shows top-level help, or command help when placed after a command |
-| `--version`, `-V` | No value | Shows the CLI version when used at the top level |
-
-Any installed-command example can be replaced with `cargo run --release --locked -- <arguments>`. A direct target path can be used instead on the matching operating system.
-
----
 
 <h2 align="center">Configuration</h2>
 
-All user configuration lives in one `.env`; there is no separate multi-wallet environment file, TOML configuration, or runtime override layer. `WALLET_KEY` selects **single-wallet mode**, while `WALLETS_FILE=wallets.json` selects **multiple-wallet mode** and loads that manifest. If both remain present, only `SPONSORED=true` resolves the conflict by selecting the manifest; self-funded configuration still requires one wallet source. Unknown or duplicate settings are rejected so misspellings cannot silently change behavior.
+The tool reads its settings from `.env`. Unknown and duplicate keys are rejected.
+[`.env.example`](.env.example) lists all supported settings.
 
-### Required settings
+<h3 align="center">Wallet and transaction settings</h3>
 
-| Setting | Example | Purpose |
+| Setting | Default | Description |
 | --- | --- | --- |
-| `WALLET_KEY` | `0x...` | One of `WALLET_KEY` or `WALLETS_FILE` is required; this key selects **single-wallet mode** |
-| `WALLETS_FILE` | `wallets.json` | One of `WALLET_KEY` or `WALLETS_FILE` is required; this strict version-1 manifest selects **multiple-wallet mode** |
-| `RPC_URL` | `https://...` | Required RPC endpoint for every network command; `wallets create` is the only command that does not load `.env` |
-| `FEE_AUTOMATIC` | `true` | Required Boolean fee-mode selection; `true` is the value supplied by `.env.example` |
-| `GAS_LIMIT` | `300000` | Required nonzero mint-call gas allowance per wallet; `300000` is the value supplied by `.env.example` |
+| `WALLET_KEY` | Required | One private key, optionally prefixed with `0x`. |
+| `RPC_URL` | Required | Endpoint for chain reads, submission, and receipt tracking. HTTPS is required except for HTTP loopback testing. |
+| `FEE_AUTOMATIC` | Required | `true` for automatic fees or `false` for manual fees. |
+| `GAS_LIMIT` | Required | Positive transaction gas limit; the example uses `300000`. |
+| `MAX_FEE_PER_GAS_GWEI` | Manual mode only | Positive maximum fee per gas, in gwei. |
+| `MAX_PRIORITY_FEE_PER_GAS_GWEI` | Manual mode only | Nonnegative priority fee, in gwei; must not exceed the maximum fee. |
+| `RPC_REQUEST_TIMEOUT_MS` | `10000` | RPC request timeout; 100–120000 ms. |
+| `PUBLIC_MINT_BROADCAST_OFFSET_MS` | `0` | Public submission lead time; 0–60000 ms. Positive values send early and can cause a revert if mined before the phase opens. |
+| `PENDING_TIMEOUT_SECONDS` | `20` | Receipt-tracking timeout; 1–86400 seconds. |
+| `RECEIPT_POLL_INTERVAL_MS` | `250` | Wait between receipt checks; 50–60000 ms. |
 
-The chain ID is read from `RPC_URL`; the user does not configure a separate chain name or chain ID. Non-HTTPS RPC URLs are rejected except for local loopback development endpoints.
+Automatic fees apply a 1.25× multiplier for an active phase and 2.5× for a scheduled
+phase. Remove or comment out both manual fee settings when automatic fees are
+enabled. For manual fees, set `FEE_AUTOMATIC=false` and supply both fee values.
 
-### Fee and transaction settings
+<h3 align="center">OpenSea request settings</h3>
 
-| Setting | Default | Purpose |
-| --- | ---: | --- |
-| `MAX_FEE_PER_GAS_GWEI` | unset | Required manual maximum fee when automatic fees are disabled |
-| `MAX_PRIORITY_FEE_PER_GAS_GWEI` | unset | Required manual priority fee when automatic fees are disabled |
-| `TRANSACTION_MAX_ATTEMPTS` | `3` | Maximum initial submission and same-nonce replacement attempts; range `1-10` |
-| `PENDING_TIMEOUT_SECONDS` | `20` | Time before a pending transaction becomes eligible for replacement; range `1-86400` |
-| `RECEIPT_POLL_BASE_DELAY_MS` | `250` | Initial receipt polling delay; range `50-60000` |
-| `RECEIPT_POLL_MAX_DELAY_MS` | `2000` | Maximum receipt polling delay; range `50-60000` and not below the initial delay |
-| `REPLACEMENT_BUMP_BPS` | `11250` | Replacement fee factor; range `10001-20000` basis points (`11250` means 112.5%) |
-
-### Scheduling and request settings
-
-| Setting | Default | Purpose |
-| --- | ---: | --- |
-| `SCHEDULE_REFRESH_INTERVAL_SECONDS` | `600` | Metadata and eligibility refresh interval for selected phases; range `10-86400` seconds |
-| `OPENSEA_REQUEST_TIMEOUT_MS` | `10000` | General OpenSea request timeout; range `100-120000` ms |
-| `ELIGIBILITY_REQUEST_TIMEOUT_MS` | `5000` | Eligibility request timeout; range `100-120000` ms |
-| `OPENSEA_MAX_ATTEMPTS` | `3` | Maximum attempts for transient metadata, authentication, eligibility, and pre-launch private-stage probes; range `1-10` |
-| `OPENSEA_RETRY_INTERVAL_MS` | `250` | Fixed delay between retryable OpenSea requests, including calldata; range `50-30000` ms |
-| `OPENSEA_CALLDATA_MAX_ATTEMPTS` | `40` | Maximum T-2 calldata requests for not-ready, transient, malformed, or locally inconsistent actions; range `1-1000` |
-
-### Multi-wallet settings
-
-| Setting | Mode | Purpose |
+| Setting | Default | Description |
 | --- | --- | --- |
-| `SPONSORED` | **Multiple wallets** | Required Boolean: `true` selects **sponsored EIP-7702 mode**; `false` selects up to 10 concurrent wallets in **self-funded mode** |
-| `RECIPIENT_ADDRESS` | **Multiple wallets** | Receives every minted NFT; may be omitted only when `SPONSOR_KEY` supplies the fallback and must differ from the sponsored executor |
-| `SPONSOR_KEY` | **Sponsored/deployment/funding/fallback** | Pays only outer transaction gas in sponsored mints; also pays executor deployment, undelegation, and `opensea-mint mint --fund`, and may supply the fallback recipient |
-| `SPONSORED_EXECUTOR_ADDRESS` | **Sponsored** | Required by sponsored mint and `doctor`; `deploy-executor` can calculate and print it when unset, and its runtime is verified before use |
-| `SPONSORED_OPERATION_DEADLINE_SECONDS` | **Sponsored** | Wallet mint-signature validity window; default `120`, range `30-3600` seconds |
+| `OPENSEA_REQUEST_TIMEOUT_MS` | `10000` | General request timeout; 100–120000 ms. |
+| `ELIGIBILITY_REQUEST_TIMEOUT_MS` | `5000` | Eligibility request timeout; 100–120000 ms. |
+| `OPENSEA_ACTION_REQUEST_TIMEOUT_MS` | `3000` | Mint action request timeout; 100–120000 ms. |
+| `OPENSEA_ATTEMPTS` | `6` | Request attempt limit; clamped to 6–10. |
+| `OPENSEA_RETRY_INTERVAL_MS` | `250` | Request retry interval; 50–30000 ms. |
+| `OPENSEA_CALLDATA_ATTEMPTS` | `15` | Private mint calldata attempt limit; clamped to 15–1000 and subject to timing and phase-expiry limits. |
 
-### `.env` discovery
-
-When an uninstalled binary inside the project tree is launched from a parent directory, the program searches upward from the binary location first. This prevents an unrelated parent `.env` from shadowing the project file. The installed `opensea-mint` command searches the launch directory and its parents.
-
----
-
-<div align="center">
-  <h2>Disclaimer and License</h2>
-  <p><strong>Use this software entirely at your own risk.</strong> It uses an unaudited EIP-7702 executor smart contract and OpenSea's private internal API, which may change, become incompatible, or stop working at any time. Blockchain transactions are irreversible and may result in loss of funds or digital assets.</p>
-  <p>The software is provided "as is" without warranties of any kind. To the maximum extent permitted by law, the author and contributors will not be liable for any direct, indirect, incidental, consequential, financial, technical, or other loss, damage, injury, or harm arising from use of, inability to use, or reliance on this software.</p>
-  <p>The project is distributed under the <a href="LICENSE">MIT License</a>.</p>
-</div>
+`OPENSEA_ATTEMPTS` and `OPENSEA_RETRY_INTERVAL_MS` also govern RPC wallet preparation
+and public settings recovery. Scheduled recovery uses its time window instead of
+the attempt limit. Final wallet refresh and endpoint warm-up have separate retry
+policies; these settings never cause a transaction to be resent.
