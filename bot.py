@@ -1168,6 +1168,18 @@ async def guard(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         raise ApplicationHandlerStop
 
 
+def _log_dir() -> Path:
+    """Where the rotating log lives. Overridable via OSNM_Z_LOG_DIR.
+
+    Split out of _configure_logging so a test can redirect the log, and so an
+    operator can move it off a read-only checkout.
+    """
+    override = os.environ.get("OSNM_Z_LOG_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path(__file__).resolve().parent / "logs"
+
+
 def _configure_logging() -> None:
     """Send logs to stderr and to a rotating file next to the app.
 
@@ -1183,11 +1195,19 @@ def _configure_logging() -> None:
     try:
         from logging.handlers import RotatingFileHandler
 
-        log_dir = Path(__file__).resolve().parent / "logs"
+        log_dir = _log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(
             log_dir / "bot.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
         )
+        # The log records request and response detail, so keep it owner-only on
+        # platforms that have POSIX modes. No-op on Windows, where setup.ps1
+        # applies NTFS ACLs instead.
+        try:
+            os.chmod(log_dir, 0o700)
+            os.chmod(log_dir / "bot.log", 0o600)
+        except OSError:
+            pass
         handler.setFormatter(
             pylogging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
         )

@@ -7,9 +7,11 @@ covered by running the real handlers against fake Telegram objects.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -840,43 +842,6 @@ def test_other_verbs_unchanged() -> None:
 # ── Windows portability ─────────────────────────────────────────────────
 
 
-def test_logging_writes_to_a_file_beside_the_app() -> None:
-    """A hidden scheduled task on Windows has no console, so a file log is the
-    only way to diagnose a failure. Linux gets the journal; both need stderr."""
-    import inspect
-    import logging
-    import pathlib
-    import tempfile
-
-    root = logging.getLogger()
-    before_handlers = list(root.handlers)
-    before_level = root.level
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            root.handlers = []
-            bot._configure_logging()
-            file_handlers = [
-                h
-                for h in root.handlers
-                if isinstance(h, logging.handlers.RotatingFileHandler)
-            ]
-            assert file_handlers, "expected a rotating file handler"
-            logging.getLogger("probe").warning("hello")
-            for h in file_handlers:
-                h.flush()
-                text = pathlib.Path(h.baseFilename).read_text()
-            assert "hello" in text
-            # maxBytes/backupCount bound the log instead of growing forever
-            assert file_handlers[0].maxBytes == 2_000_000
-            assert file_handlers[0].backupCount == 3
-        finally:
-            for h in root.handlers:
-                if h not in before_handlers:
-                    h.close()
-            root.handlers = before_handlers
-            root.setLevel(before_level)
-
-
 def test_logging_never_writes_the_key() -> None:
     """Regression guard: the key must not reach the log file, even on error."""
     import inspect
@@ -917,3 +882,48 @@ def test_env_paths_are_relative_to_the_module() -> None:
     offenders = re.findall(pattern, source)
     assert not offenders, f"hardcoded POSIX paths: {offenders}"
     assert "Path(__file__).resolve().parent" in source
+
+
+def test_tests_never_write_into_the_real_log_directory() -> None:
+    """Regression: the logging test wrote 'probe: hello' into the live bot log.
+
+    Asserts the production log is neither created nor modified, so a test that
+    forgets to set OSNM_Z_LOG_DIR fails loudly instead of polluting operations.
+    """
+    real_log = Path(bot.__file__).resolve().parent / "logs" / "bot.log"
+    existed_before = real_log.exists()
+    before = real_log.read_text() if existed_before else None
+
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    saved_level = root.level
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["OSNM_Z_LOG_DIR"] = str(Path(tmp) / "logs")
+        # Force a reconfigure: basicConfig is a no-op while a handler is attached,
+        # and basicConfig(force=True) is what actually replaces them.
+        root.handlers = []
+        try:
+            root.handlers = []
+            bot._configure_logging()
+            assert not any(
+                str(getattr(h, "baseFilename", "")).startswith(str(real_log.parent))
+                for h in root.handlers
+            ), "handler must point at the temp dir, not the app logs dir"
+            logging.getLogger("probe").warning("probe: hello")
+            for handler in root.handlers:
+                handler.flush()
+        finally:
+            for handler in root.handlers:
+                if handler not in saved:
+                    handler.close()
+            root.handlers = saved
+            root.setLevel(saved_level)
+            os.environ.pop("OSNM_Z_LOG_DIR", None)
+
+    if existed_before:
+        after = real_log.read_text() if real_log.exists() else None
+        assert after == before, "the test suite must not write to the production log"
+    else:
+        # Creating the file at all is the failure: the redirect must keep the
+        # handler in the temp dir rather than the app directory.
+        assert not real_log.exists(), "a test created the production log"
