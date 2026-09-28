@@ -178,6 +178,6 @@ Info ''
 Info 'next steps:'
 Info "  status   : Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo"
 Info "  start    : Start-ScheduledTask -TaskName $TaskName"
-Info "  logs     : \$env:APPDATA\osnm-z-telegram-bot\bot.log"
+Info "  logs     : $(Join-Path $ScriptDir 'logs\bot.log')"
 Info '  foreground for debugging:'
 Info "    powershell -ExecutionPolicy Bypass -File .\run-bot.ps1"

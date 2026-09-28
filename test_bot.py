@@ -1008,3 +1008,37 @@ def test_facade_reexports_every_public_name() -> None:
     for name in bot.__all__:
         assert hasattr(bot, name), f"facade is missing {name}"
     assert len(bot.__all__) == len(set(bot.__all__)), "duplicate entries in __all__"
+
+
+def test_log_dir_is_bot_logs_not_inside_the_package() -> None:
+    """The log must land in bot/logs/, beside the launchers and where the
+    README points. When the code moved into osnmzbot/, parent/"logs" started
+    creating a runtime directory inside the install tree."""
+    from osnmzbot.app import _log_dir
+
+    target = _log_dir()
+    assert target.name == "logs"
+    assert target.parent.name == "bot", f"expected <checkout>/bot/logs, got {target}"
+    assert target.parent.parent.name != "osnmzbot"
+
+
+def test_log_dir_honours_the_override() -> None:
+    import tempfile
+
+    from osnmzbot.app import _log_dir
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["OSNM_Z_LOG_DIR"] = tmp
+        try:
+            assert _log_dir() == pathlib.Path(tmp).resolve()
+        finally:
+            os.environ.pop("OSNM_Z_LOG_DIR", None)
+
+
+def test_no_runtime_directories_inside_the_package() -> None:
+    """logs/ or __pycache__ inside osnmzbot/ means a path regression shipped."""
+    import osnmzbot
+
+    pkg = pathlib.Path(osnmzbot.__file__).parent
+    for stray in ("logs", ".uv-cache", ".tmp"):
+        assert not (pkg / stray).exists(), f"{stray}/ should not live in the package"

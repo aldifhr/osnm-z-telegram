@@ -25,7 +25,10 @@ def _log_dir() -> Path:
     override = os.environ.get("OSNM_Z_LOG_DIR", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    return Path(__file__).resolve().parent / "logs"
+    # One level up from osnmzbot/ so the log lands in bot/logs/, beside the
+    # launcher scripts and where the README says to look. Keeping it inside
+    # the package would also ship a runtime directory into the install tree.
+    return Path(__file__).resolve().parent.parent / "logs"
 
 
 def _configure_logging() -> None:
