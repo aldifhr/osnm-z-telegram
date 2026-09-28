@@ -13,19 +13,24 @@
   account can read the wallet key.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File .\setup.ps1
-  powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SkipTask
+  powershell -ExecutionPolicy Bypass -File .\setup.ps1 -OsnmZPath C:\src\osnm-z
+  powershell -ExecutionPolicy Bypass -File .\setup.ps1 -OsnmZPath C:\src\osnm-z -SkipTask
   powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Uninstall
 #>
 [CmdletBinding()]
 param(
+    # Path to the osnm-z checkout. The bot files are copied into its bot\
+    # directory, so this is the directory that holds src\ and uv.lock.
+    # Not mandatory: -Uninstall only removes the scheduled task.
+    [string] $OsnmZPath,
+
     # Register the scheduled task that starts the bot at logon.
     [switch] $Task,
     # Register the task to start the bot when the machine boots, hidden.
     [switch] $TaskAtStartup,
     # Skip the scheduled task entirely.
     [switch] $SkipTask,
-    # Remove the scheduled task and the ACL entries added by this script.
+    # Remove the scheduled task.
     [switch] $Uninstall
 )
 
@@ -33,7 +38,6 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppDir    = Split-Path -Parent $ScriptDir
 $TaskName  = 'osnm-z-telegram-bot'
 $CurrentUser = "$env:USERDOMAIN\$env:USERNAME"
 
@@ -44,14 +48,33 @@ function Die($Message)   { Write-Host "[!] $Message" -ForegroundColor Red; exit 
 
 # ── uninstall ────────────────────────────────────────────────────────────
 if ($Uninstall) {
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        Ok "removed scheduled task: $TaskName"
-    } else { Info "no scheduled task named $TaskName" }
+    # -Uninstall only removes the scheduled task, so it must work without
+    # -OsnmZPath; a Mandatory parameter here would block the one command that
+    # does not need a checkout.
+    if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+            Ok "removed scheduled task: $TaskName"
+        } else { Info "no scheduled task named $TaskName" }
+    } else {
+        # Task Scheduler cmdlets are Windows-only; without this the raw
+        # CommandNotFoundException surfaces instead of a usable message.
+        Warn 'Get-ScheduledTask is unavailable here, so no task was removed.'
+    }
     exit 0
 }
 
-Info "app dir : $AppDir"
+if (-not $OsnmZPath) {
+    Die 'pass -OsnmZPath <checkout>. Example: .\setup.ps1 -OsnmZPath C:\src\osnm-z'
+}
+$OsnmZPath = (Resolve-Path -LiteralPath $OsnmZPath).Path
+if (-not (Test-Path (Join-Path $OsnmZPath 'src\osnm_z') -PathType Container)) {
+    Die "$OsnmZPath does not look like an osnm-z checkout (no src\osnm_z). Pass -OsnmZPath <checkout>."
+}
+if (-not (Test-Path (Join-Path $OsnmZPath 'uv.lock') -PathType Leaf)) {
+    Die "$OsnmZPath has no uv.lock. Run 'uv sync --frozen' there first."
+}
+Info "osnm-z   : $OsnmZPath"
 
 # ── 1. dependencies ──────────────────────────────────────────────────────
 $Uv = Get-Command uv -ErrorAction SilentlyContinue
@@ -61,9 +84,9 @@ if (-not $Uv) {
     Die  'uv is required.'
 }
 
-Push-Location $AppDir
+Push-Location $OsnmZPath
 try {
-    if (-not (Test-Path (Join-Path $AppDir '.venv'))) {
+    if (-not (Test-Path (Join-Path $OsnmZPath '.venv'))) {
         Info 'creating the virtualenv (first run, downloads the toolchain)'
         & $Uv sync --frozen --python 3.12
         if ($LASTEXITCODE -ne 0) { Die "uv sync failed" }
@@ -79,28 +102,55 @@ try {
 }
 finally { Pop-Location }
 
-# ── 2. env files ─────────────────────────────────────────────────────────
-$AppEnv = Join-Path $AppDir '.env'
-$BotEnv = Join-Path $ScriptDir '.env'
-$AppExample = Join-Path $ScriptDir 'app.env.example'
-$BotExample = Join-Path $ScriptDir 'bot.env.example'
+# ── 2. assemble the install: copy the bot into <osnm-z>\bot ─────────────
+# An upstream clone has no bot\ directory, and bot.py has to sit at
+# <osnm-z>\bot\bot.py with osnmzbot\ beside it so that ../src resolves the
+# upstream package. Copying here is what makes the rest of this script and
+# run-bot.ps1 work; without it the launcher fails on a missing src\ directory.
+$BotDir = Join-Path $OsnmZPath 'bot'
+if (-not (Test-Path $BotDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $BotDir | Out-Null
+    Info "created $BotDir"
+}
 
+Info 'copying the bot into the checkout'
+foreach ($name in 'bot.py', 'supply.py', 'test_bot.py', 'run-bot.sh', 'run-bot.ps1', 'run-bot.cmd') {
+    $source = Join-Path $ScriptDir $name
+    if (Test-Path $source -PathType Leaf) {
+        Copy-Item $source (Join-Path $BotDir $name) -Force
+    }
+}
+Copy-Item (Join-Path $ScriptDir 'osnmzbot') $BotDir -Recurse -Force
+Ok "bot files in $BotDir"
+
+# .env: create the app config from the example, never overwrite an existing one
+$AppEnv = Join-Path $OsnmZPath '.env'
+$AppExample = Join-Path $ScriptDir 'app.env.example'
 if (-not (Test-Path $AppEnv -PathType Leaf)) {
     if (Test-Path $AppExample -PathType Leaf) {
         Copy-Item $AppExample $AppEnv
-        Warn "created $AppEnv from app.env.example - set WALLET_KEY and RPC_URL"
-    } else { Die "missing $AppEnv and no app.env.example to copy from" }
+        Warn "created .env from app.env.example - set WALLET_KEY and RPC_URL"
+    } else { Die 'no .env and no app.env.example to copy from' }
 }
+$BotEnv = Join-Path $BotDir '.env'
+$BotExample = Join-Path $ScriptDir 'bot.env.example'
 if (-not (Test-Path $BotEnv -PathType Leaf)) {
     if (Test-Path $BotExample -PathType Leaf) {
         Copy-Item $BotExample $BotEnv
-        Warn "created $BotEnv from bot.env.example - set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID"
-    } else { Die "missing $BotEnv and no bot.env.example to copy from" }
+        Warn 'created bot\.env from bot.env.example - set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID'
+    } else { Die 'no bot\.env and no bot.env.example to copy from' }
 }
+
 
 # ── 3. ACLs: the Linux 0600 equivalent ────────────────────────────────────
 # icacls is used rather than the ACL cmdlets because it is available on every
 # Windows edition, including Home, where Get-Acl/Set-Acl behave inconsistently.
+# It is a Windows tool, so on anything else the step is skipped with a warning
+# rather than aborting the install.
+if (-not (Get-Command icacls.exe -ErrorAction SilentlyContinue)) {
+    Warn 'icacls.exe is unavailable (not Windows), so the .env files were not ACL-locked.'
+    Warn 'On Windows, re-run this script to apply the lock-down.'
+} else {
 function Lock-Down([string] $Path, [switch] $IsDirectory) {
     if (-not (Test-Path $Path)) { return }
     $target = if ($IsDirectory) { "$Path\*" } else { $Path }
@@ -126,14 +176,31 @@ foreach ($secret in @($AppEnv, $BotEnv)) {
         Ok "  ${secret} -> ${CurrentUser} + SYSTEM only"
     }
 }
-# The venv and the checkout tree can hold the caches; lock the .env parents too.
-Lock-Down (Join-Path $ScriptDir '.env') -IsDirectory:$false 2>$null | Out-Null
+# The env files now live in the checkout, not next to this script.
+Lock-Down $BotEnv -IsDirectory:$false | Out-Null
+}
 
 # ── 4. self-check ────────────────────────────────────────────────────────
-$check = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ScriptDir 'run-bot.ps1') -Check 2>&1
-$check | ForEach-Object { Write-Host "  $_" }
-if ($LASTEXITCODE -ne 0) { Die 'run-bot.ps1 -Check failed' }
-Ok 'configuration validated'
+# Check the launcher as it will actually run: from <osnm-z>\bot, against that
+# checkout's .env. Checking the copy next to this script would validate the
+# wrong directory and report a confusing config error.
+$launcher = Join-Path $BotDir 'run-bot.ps1'
+if (-not (Test-Path $launcher -PathType Leaf)) {
+    Die "missing $launcher; the install is incomplete"
+}
+$check = $null
+$shell = Get-Command powershell -ErrorAction SilentlyContinue
+if (-not $shell) {
+    # No Windows PowerShell host (this script is also linted on other
+    # platforms); report and let the operator run the check themselves.
+    Warn 'powershell was not found, so the self-check was skipped.'
+    Warn "Run it manually:  pwsh -File `"$(Join-Path $BotDir 'run-bot.ps1')`" -Check"
+} else {
+    $check = & $shell.Source -NoProfile -ExecutionPolicy Bypass -File $launcher -Check 2>&1
+    $check | ForEach-Object { Write-Host "  $_" }
+    if ($LASTEXITCODE -ne 0) { Die 'run-bot.ps1 -Check failed' }
+    Ok 'configuration validated'
+}
 
 # ── 5. autostart ─────────────────────────────────────────────────────────
 if ($SkipTask) {
@@ -142,10 +209,18 @@ if ($SkipTask) {
     exit 0
 }
 
+if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) {
+    # The ScheduledTasks module is Windows-only. Everything else is installed;
+    # only the autostart entry is missing, so say so instead of crashing.
+    Warn 'Register-ScheduledTask is unavailable (not Windows), so no autostart was set up.'
+    Info 'Start the bot manually, or re-run this script on Windows.'
+    exit 0
+}
+
 $Action = New-ScheduledTaskAction `
     -Execute 'powershell.exe' `
-    -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $ScriptDir 'run-bot.ps1')) `
-    -WorkingDirectory $AppDir
+    -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $BotDir 'run-bot.ps1')) `
+    -WorkingDirectory $OsnmZPath
 
 if ($TaskAtStartup) {
     # Runs as SYSTEM at boot, so logon triggers and the user profile do not exist.
@@ -178,6 +253,6 @@ Info ''
 Info 'next steps:'
 Info "  status   : Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo"
 Info "  start    : Start-ScheduledTask -TaskName $TaskName"
-Info "  logs     : $(Join-Path $ScriptDir 'logs\bot.log')"
+Info "  logs     : $(Join-Path $BotDir 'logs\bot.log')"
 Info '  foreground for debugging:'
 Info "    powershell -ExecutionPolicy Bypass -File .\run-bot.ps1"

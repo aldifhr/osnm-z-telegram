@@ -18,14 +18,14 @@ ever parsed, and no minting behaviour is reimplemented here.
 | Concern | Owner |
 |---|---|
 | Mint stages, eligibility, calldata, signing, broadcast, receipt | [`zunmax/osnm-z`](https://github.com/zunmax/osnm-z) |
-| Chain auto-detection across 6 chains | this repo (`bot.py`) |
-| Live `totalSupply()` progress + price/gas/balance breakdown | this repo |
-| Telegram UI, key handling, confirmations | this repo |
+| Chain auto-detection across 6 networks | `osnmzbot/config.py` |
+| Live `totalSupply()` progress, price/gas/balance breakdown | `osnmzbot/onchain.py`, `osnmzbot/render.py` |
+| Telegram UI, key handling, confirmations | `osnmzbot/handlers.py`, `osnmzbot/wallet.py` |
 
 ## Features
 
 - **Link-to-mint.** Paste an OpenSea collection URL, slug, or contract address. No
-  command needed. Ordinary chat text is ignored (see *Pre-filter* below).
+  command needed. Ordinary chat text is ignored (see [Pre-filter](#pre-filter)).
 - **Chain auto-detection.** Probes candidate RPCs and matches the collection's real
   chain. A chain mismatch retries the next endpoint instead of failing.
 - **Full cost breakdown before sending.** Per-NFT price, subtotal, gas estimate from
@@ -39,15 +39,16 @@ ever parsed, and no minting behaviour is reimplemented here.
 
 ## Requirements
 
-- Linux with `systemd`
+- Linux with `systemd`, **or** Windows 10+ ([Windows](#windows))
 - Python 3.12–3.13 (upstream constraint) via [`uv`](https://docs.astral.sh/uv/)
-- An `osnm-z` checkout at `../osnm-z` (see [Install](#install))
+- An `osnm-z` checkout — this repo's files go into its `bot/` directory
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
 Verified on: Python 3.12.13, `python-telegram-bot` 21.11, `httpx` 0.28.1,
-`orjson` 3.11.9, `uv` 0.11.28, git 2.43.0, Robinhood chain (4663), Base (8453).
+`orjson` 3.11.9, `uv` 0.11.28, git 2.43.0. Exercised against Robinhood chain (4663)
+and Base (8453).
 
-## Install
+## Install (Linux)
 
 ```bash
 # 1. Get the upstream mint engine
@@ -55,17 +56,17 @@ git clone https://github.com/zunmax/osnm-z.git
 cd osnm-z
 uv sync --frozen --python 3.12
 cp .env.example .env
-chmod 600 .env            # holds WALLET_KEY; a plain cp leaves it world-readable
+chmod 600 .env            # holds WALLET_KEY; a plain cp leaves it 0644
 
 # 2. Fill in WALLET_KEY and RPC_URL for your target chain
 nano .env
 
 # 3. Get this Telegram layer
 cd ..
-git clone <this-repo> osnm-z-telegram-bot
-cd osnm-z-telegram-bot
+git clone https://github.com/aldifhr/osnm-z-telegram.git
 
-# 4. Bot credentials — kept in a separate file, see "Two env files"
+# 4. Bot credentials — kept in a separate file, see "Two env files" below
+cd osnm-z-telegram
 cat > bot.env <<'EOF'
 TELEGRAM_BOT_TOKEN=123456:ABC-your-token
 TELEGRAM_ALLOWED_CHAT_ID=your-numeric-telegram-id
@@ -75,25 +76,47 @@ EOF
 chmod 600 bot.env
 ```
 
-`bot.py` expects to sit inside the `osnm-z` checkout at `bot/`, so that
-`../src` resolves the upstream package:
+Now assemble the install. `bot/` does not exist in an upstream clone, so create it
+first — `cp -r osnmzbot osnm-z/bot/` fails otherwise:
 
 ```bash
-uv pip install -r requirements-bot.txt   # into the osnm-z venv
-uv pip install pytest                    # test-only
-cp -r osnmzbot osnm-z/bot/
-mv bot.py supply.py test_bot.py run-bot.sh requirements-bot.txt osnm-z/bot/
+uv pip install -r requirements-bot.txt    # into the osnm-z venv
+uv pip install pytest                     # test-only, for the suite below
+
+mkdir -p ../osnm-z/bot
+cp -r osnmzbot ../osnm-z/bot/
+cp bot.py supply.py test_bot.py run-bot.sh ../osnm-z/bot/
+
+# bot/.env is the file the launcher reads; bot.env is the template you filled in
+cp bot.env ../osnm-z/bot/.env
+chmod 600 ../osnm-z/bot/.env
+
 cp systemd/osnm-z-bot.service /etc/systemd/system/
-sed -i "s#/opt/osnm-z#$PWD/osnm-z#g" /etc/systemd/system/osnm-z-bot.service
+sed -i "s#/opt/osnm-z#$(cd ../osnm-z && pwd)#g" /etc/systemd/system/osnm-z-bot.service
 systemctl daemon-reload && systemctl enable --now osnm-z-bot
 ```
+
+Verify:
+
+```bash
+cd ../osnm-z
+uv run --frozen --no-sync python -m pytest bot/test_bot.py -q   # 97 passed
+systemctl status osnm-z-bot
+tail -f bot/logs/bot.log
+```
+
+`bot.py` must end up at `<checkout>/bot/bot.py` with `osnmzbot/` beside it, so that
+`../src` resolves the upstream package.
 
 ### Two env files, on purpose
 
 `osnm_z.config._validate_known_settings` **rejects any key it does not recognise**.
 Telegram secrets therefore cannot live in the app `.env` next to `WALLET_KEY` — the
 bot reads `bot/.env` (sourced into the process environment by `run-bot.sh`) and
-never exposes it to the mint library.
+never exposes it to the mint library. This split is why the launcher exists at all,
+and why `config.load()` pins the path instead of using `LoadedConfig.load()`: the
+latter starts searching from `sys.argv[0]`, which under the bot is `bot/bot.py`, and
+would find `bot/.env` and reject it.
 
 ```
 osnm-z/.env        WALLET_KEY, RPC_URL, gas and retry settings  (0600)
@@ -102,8 +125,8 @@ osnm-z/bot/.env    TELEGRAM_BOT_TOKEN, chat id, extra RPCs     (0600)
 
 ## Windows
 
-`bot.py` is pure Python and runs unchanged on Windows. Only the launcher and
-autostart differ, because there is no systemd and no mode 0600.
+The bot is pure Python and runs unchanged. Only the launcher and autostart differ,
+because there is no `systemd` and no mode 0600.
 
 ```powershell
 git clone https://github.com/zunmax/osnm-z.git C:\src\osnm-z
@@ -114,12 +137,28 @@ copy .env.example .env            # set WALLET_KEY and RPC_URL
 cd C:\src
 git clone https://github.com/aldifhr/osnm-z-telegram.git
 cd osnm-z-telegram
-powershell -ExecutionPolicy Bypass -File .\setup.ps1     # deps, ACLs, autostart
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -OsnmZPath C:\src\osnm-z
 ```
 
-`setup.ps1` creates `C:\src\osnm-z\bot\.env` from `bot.env.example`, installs
-`requirements-bot.txt`, registers a Task Scheduler task, and locks the env files
-down. Then:
+`-OsnmZPath` is required and is the directory holding `src\` and `uv.lock`. The
+script refuses a path that is not an osnm-z checkout rather than half-installing.
+It then:
+
+1. installs `requirements-bot.txt` into the checkout's venv,
+2. creates `<checkout>\bot\` and copies `osnmzbot\`, `bot.py`, `supply.py`,
+   `test_bot.py`, and the launchers into it,
+3. creates `<checkout>\.env` and `<checkout>\bot\.env` from the examples,
+   without overwriting either if it already exists,
+4. locks both env files to your account and SYSTEM via `icacls`,
+5. runs `run-bot.ps1 -Check` against the real install,
+6. registers a Task Scheduler task.
+
+Steps 4, 5, and 6 warn and continue when their Windows-only tooling is missing,
+so the script is also usable for inspection on other platforms. `-SkipTask` stops
+after step 5; `-Uninstall` removes the task and needs no `-OsnmZPath`.
+
+`setup.ps1` deliberately leaves the Wallet key alone: create `bot\.env` from
+`bot.env.example`, fill in the token and chat id, then start.
 
 ```powershell
 .\run-bot.ps1            # foreground
@@ -136,7 +175,8 @@ more on Windows, not less:
 | `.env` at mode 0600 | NTFS ACL: current user + SYSTEM only |
 | `ProtectSystem=full` | not available; relies on the file ACLs |
 | `journalctl -u` | `bot\logs\bot.log`, rotated at 2 MB x 3 |
-| `systemctl restart` | `Restart-ScheduledTask`, or `Stop-ScheduledTask` then `Start-ScheduledTask` |
+| `systemctl restart` | `Stop-ScheduledTask` then `Start-ScheduledTask` |
+| `setup.ps1 -Uninstall` | not applicable; `setup.ps1 -Uninstall` removes the task |
 
 `icacls` is used instead of the ACL cmdlets because it exists on every edition,
 including Home. `setup.ps1` aborts if `BUILTIN\Users` still has access after the
@@ -145,8 +185,8 @@ key.
 
 Three things to keep in mind:
 
-- `os.chmod` is a no-op on Windows, so `bot.py` cannot enforce 0600 itself. The
-  key file is only as private as its directory: keep the checkout out of
+- `os.chmod` is a no-op on Windows, so the bot cannot enforce 0600 itself. The key
+  file is only as private as its directory: keep the checkout out of
   `C:\Users\Public`, OneDrive, and any shared path.
 - A logon-triggered task runs in the user context, where `uv` and the venv live.
   `-TaskAtStartup` registers an at-boot task as SYSTEM instead, which is headless
@@ -156,39 +196,65 @@ Three things to keep in mind:
 
 ## Layout
 
-`bot.py` is a facade over the `osnmzbot` package. One concern per module, and
-the modules that can be reused from another front-end are free of Telegram
-imports:
+`bot.py` is a facade over the `osnmzbot` package. One concern per module, and the
+modules reusable from another front-end import no Telegram types at all:
 
-| Module | Concern | Reusable outside a bot |
+| Module | Concern | Telegram-free |
 |---|---|---|
-| `osnmzbot/config` | app paths, chain registry, config loading | yes |
-| `osnmzbot/locator` | is this message a collection reference? | yes |
-| `osnmzbot/render` | message text and price formatting | yes, no I/O |
-| `osnmzbot/onchain` | direct `eth_call` reads | yes |
-| `osnmzbot/models` | the in-flight mint `Session` | yes |
 | `osnmzbot/locks` | process-wide state | yes |
 | `osnmzbot/text` | user-facing copy | yes |
-| `osnmzbot/wallet` | reading the wallet, persisting a key | Telegram-free, but touches `.env` |
-| `osnmzbot/flows` | session lifecycle | needs Telegram |
-| `osnmzbot/handlers` | command and callback handlers | needs Telegram |
-| `osnmzbot/app` | logging setup, handler registration | entry point |
+| `osnmzbot/onchain` | direct `eth_call` reads | yes |
+| `osnmzbot/models` | the in-flight mint `Session` | yes |
+| `osnmzbot/locator` | is this message a collection reference? | yes |
+| `osnmzbot/app` | logging setup, handler registration | yes |
+| `osnmzbot/wallet` | reading the wallet, persisting a key | yes, but touches `.env` |
+| `osnmzbot/config` | app paths, chain registry, config loading | yes |
+| `osnmzbot/render` | message text and price formatting | yes, no I/O |
+| `osnmzbot/flows` | session lifecycle | no |
+| `osnmzbot/handlers` | Telegram command and callback handlers | no |
 
 ```python
 from osnmzbot.locator import looks_like_locator
 from osnmzbot.config import load, app_dir
+from osnmzbot.render import price_table
 ```
 
-Two details worth knowing if you extend this:
+Three details worth knowing before extending this:
 
 - `app_dir()` is a function, not the `APP_DIR` constant. A constant is frozen at
-  import time, which makes redirecting the env files in a test impossible
-  without patching every module that reads them. Use `set_app_dir()` to point
-  the bot at a scratch root and `set_app_dir(None)` to restore.
+  import time, which makes redirecting the env files in a test impossible without
+  patching every module that reads them. Use `set_app_dir()` to point the bot at a
+  scratch root and `set_app_dir(None)` to restore.
 - `config.APP_DIR` walks up three levels from `osnmzbot/config.py`. Getting that
   wrong points the mint library at `bot/.env`, which it rejects for holding
-  `TELEGRAM_*` keys, so the bot fails with a config error that looks unrelated
-  to the path. A test asserts the right directory.
+  `TELEGRAM_*` keys, so the bot fails with a config error that looks unrelated to
+  the path. A test asserts the right directory.
+- The log lands in `<checkout>/bot/logs/bot.log`, beside the launchers. When this
+  code lived as a single `bot/bot.py`, `_log_dir()` naturally resolved to
+  `bot/logs`; moving it into `osnmzbot/` silently moved the log inside the package
+  while the README and `setup.ps1` still pointed at `bot/logs`. Three sources
+  disagreed, and only a test caught it. `OSNM_Z_LOG_DIR` overrides the location.
+
+## Chains
+
+`DEFAULT_RPCS` probes six public endpoints, in order, and matches the collection's
+real chain id. A mismatch is a retry signal, not a failure.
+
+| Chain | id | Default RPC |
+|---|---|---|
+| Ethereum | 1 | `https://ethereum-rpc.publicnode.com` |
+| Optimism | 10 | `https://mainnet.optimism.io` |
+| Polygon | 137 | `https://polygon-rpc.com` |
+| Robinhood | 4663 | `https://rpc.mainnet.chain.robinhood.com` |
+| Base | 8453 | `https://mainnet.base.org` |
+| Arbitrum | 42161 | `https://arb1.arbitrum.io/rpc` |
+
+Sepolia (11155111) is recognised but has no default endpoint; supply one through
+`OSNM_EXTRA_RPCS`. `RPC_URL` from the app `.env` is always tried first.
+
+For a first-come-first-served public stage, a **private RPC matters**: public
+endpoints rate-limit, and being seconds late is the difference between minting and
+not.
 
 ## Commands
 
@@ -197,10 +263,14 @@ Two details worth knowing if you extend this:
 | `<opensea link>` | Start a mint session, auto-detect the chain |
 | `/mint <link>` | Same, explicit |
 | `/wallet` | Active address plus balance on every reachable chain |
-| `/wallet set <key>` | Replace the private key (command message is deleted) |
+| `/wallet set <key>` | Replace the private key (the command message is deleted) |
 | `/wallet clear` | Empty the key — requires an inline confirmation tap |
 | `/doctor` | Config, wallet, RPC, and OpenSea client checks |
 | `/cancel` | Abandon the current session |
+
+`/wallet set` accepts the key inline, or prompts for it if you send the bare
+command. Both paths delete the message first and route through the same
+`apply_wallet_key()`.
 
 ## Owner-only enforcement
 
@@ -262,44 +332,50 @@ The third is what the bot displays, because OpenSea's availability flag is a cac
 that can lag a sold-out drop while `totalSupply()` cannot. Display thresholds:
 `< 90%` normal, `>= 90%` "hampir habis", `100%` "SOLD OUT".
 
-`totalSupply()` is a collection-wide figure, not per-stage. Accurate per-stage
-counts would need an indexer; see `supply.py` for why log scanning is not viable
-on a public RPC.
+`totalSupply()` is collection-wide, not per-stage. `supply.py` implements a
+per-stage reader over zero-address `Transfer` logs and is **not wired into the bot**:
+a full-history scan needs ~37,000 `eth_getLogs` requests per stage on Robinhood
+Chain, which times out against a public endpoint. Narrow windows (2,000 blocks) do
+complete in under a second, so a stage that opened recently is countable — a stage
+that already closed is not. Accurate per-stage history needs an indexer.
 
 ## Testing
 
 ```bash
 uv run --frozen --no-sync python -m pytest bot/test_bot.py -q
-# 84 passed
+# 97 passed
 ```
 
 `uv sync --frozen` installs the upstream lockfile only. `python-telegram-bot` and
 `pytest` are **not** in it — install from `requirements-bot.txt` first, or the bot
 fails at import with `ModuleNotFoundError: No module named 'telegram'`.
 
-Verified end-to-end from clean `git clone`s of both repos on Python 3.12.13.
-
-The test suite runs against a real checkout, not a mock: `uv sync --frozen`,
-then `pytest bot/test_bot.py` gives 94 passed on a clean clone of both repos.
+97 passed from a clean `git clone` of both repos on Python 3.12.13.
 
 `test_bot.py` builds sessions from the upstream dataclasses field-for-field rather
 than mocking, so an upstream shape change fails the tests instead of crashing in
-production. Destructive paths are exercised against a `tempfile` copy with `APP_DIR`
-redirected, so no test can touch a real `.env`.
+production. Destructive paths run against a `tempfile` copy with `set_app_dir()`
+redirected, so no test can touch a real `.env`. Tests also assert structural
+invariants that broke during development: the app root, the log location, module
+import independence, a per-module size ceiling, and the absence of star imports.
 
 ## Operational notes
 
-- `systemd` unit hardens with `ProtectSystem=full`, `ProtectHome=read-only`, and
+- The `systemd` unit hardens with `ProtectSystem=full`, `ProtectHome=read-only`, and
   `ReadWritePaths` scoped to the app directory. Because `ProtectHome` makes
   `/root/.cache` unwritable, `run-bot.sh` points `UV_CACHE_DIR` and `TMPDIR` inside
   the app tree, and resolves `uv` explicitly since `systemd` does not inherit the
   interactive shell `PATH`.
+- The rotating log is at `bot/logs/bot.log`, mode 0600, 2 MB x 3. It records request
+  and response detail, which is why it is owner-only and why `**/logs/` is ignored.
 - In-memory state (`awaiting_key`, confirm nonces, the mint lock) is lost on restart.
   A key pasted more than a minute or two after `/wallet set` is ignored and remains
   in the chat.
 - Minting uses one wallet per run. The upstream tool has no multi-wallet mode.
 - Timed/Dutch auctions are not supported by either layer: `value` is computed once
   from `getPublicDrop()` and never varies with time.
+- Use a dedicated wallet. A well-known burnable key such as `0x1111…11` is
+  auto-detected by sweepers and drained within minutes of a deposit.
 
 ## Sources
 
@@ -320,11 +396,10 @@ redirected, so no test can touch a real `.env`.
 - **Revoke any bot token that has been pasted into a chat.** A token in chat history
   is a compromised token; the owner-id guard limits blast radius but does not
   substitute for rotation.
-- Use a dedicated mint wallet holding only the amount intended. A well-known
-  burnable key such as `0x1111…11` is auto-detected by sweepers.
+- Use a dedicated mint wallet holding only the amount intended.
 - Upstream explicitly recommends a secondary wallet: only one wallet pays mint price
   and gas per run.
 
 ## License
 
-MIT, matching upstream `osnm-z`. See `LICENSE`.
+MIT, matching upstream `osnm-z`. See `LICENSE` and `NOTICE`.

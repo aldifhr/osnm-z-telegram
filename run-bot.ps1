@@ -108,10 +108,19 @@ try {
         Write-Host "app env    : $AppEnv"
         Write-Host "bot env    : $BotEnv"
         Write-Host "uv         : $Uv"
-        Write-Host "token      : $($BotConfig['TELEGRAM_BOT_TOKEN'].Substring(0,7))... (not printed in full)"
+        # Never print the token. A short or malformed value would make
+        # Substring throw and take the whole -Check with it, so bound the slice.
+        $token = [string] $BotConfig['TELEGRAM_BOT_TOKEN']
+        $head = if ($token.Length -gt 6) { $token.Substring(0, 6) } else { '<set>' }
+        Write-Host "token      : $head... (set, not printed in full)"
         Write-Host "chat id    : $($BotConfig['TELEGRAM_ALLOWED_CHAT_ID'])"
-        if (Test-Path (Join-Path $AppDir '.venv\Scripts\python.exe')) {
-            Write-Host "venv       : .venv (present)"
+        # uv creates bin\ on POSIX and Scripts\ on Windows, so accept either.
+        $venvPython = @('.venv\Scripts\python.exe', '.venv\bin\python') |
+            ForEach-Object { Join-Path $AppDir $_ } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+        if ($venvPython) {
+            Write-Host "venv       : $venvPython"
         } else {
             Write-Host "venv       : MISSING - run: uv sync --frozen --python 3.12" -ForegroundColor Yellow
         }
