@@ -99,6 +99,60 @@ osnm-z/.env        WALLET_KEY, RPC_URL, gas and retry settings  (0600)
 osnm-z/bot/.env    TELEGRAM_BOT_TOKEN, chat id, extra RPCs     (0600)
 ```
 
+## Windows
+
+`bot.py` is pure Python and runs unchanged on Windows. Only the launcher and
+autostart differ, because there is no systemd and no mode 0600.
+
+```powershell
+git clone https://github.com/zunmax/osnm-z.git C:\src\osnm-z
+cd C:\src\osnm-z
+uv sync --frozen --python 3.12
+copy .env.example .env            # set WALLET_KEY and RPC_URL
+
+cd C:\src
+git clone https://github.com/aldifhr/osnm-z-telegram.git
+cd osnm-z-telegram
+powershell -ExecutionPolicy Bypass -File .\setup.ps1     # deps, ACLs, autostart
+```
+
+`setup.ps1` creates `C:\src\osnm-z\bot\.env` from `bot.env.example`, installs
+`requirements-bot.txt`, registers a Task Scheduler task, and locks the env files
+down. Then:
+
+```powershell
+.\run-bot.ps1            # foreground
+.\run-bot.ps1 -Check     # validate config and exit
+.\run-bot.cmd            # double-clickable
+Get-Content C:\src\osnm-z\bot\logs\bot.log -Tail 50
+```
+
+Task Scheduler has no equivalent of the `systemd` hardening, so the ACLs matter
+more on Windows, not less:
+
+| Linux | Windows |
+|---|---|
+| `.env` at mode 0600 | NTFS ACL: current user + SYSTEM only |
+| `ProtectSystem=full` | not available; relies on the file ACLs |
+| `journalctl -u` | `bot\logs\bot.log`, rotated at 2 MB x 3 |
+| `systemctl restart` | `Restart-ScheduledTask`, or `Stop-ScheduledTask` then `Start-ScheduledTask` |
+
+`icacls` is used instead of the ACL cmdlets because it exists on every edition,
+including Home. `setup.ps1` aborts if `BUILTIN\Users` still has access after the
+lock-down, so a misconfigured ACL fails loudly rather than silently exposing the
+key.
+
+Three things to keep in mind:
+
+- `os.chmod` is a no-op on Windows, so `bot.py` cannot enforce 0600 itself. The
+  key file is only as private as its directory: keep the checkout out of
+  `C:\Users\Public`, OneDrive, and any shared path.
+- A logon-triggered task runs in the user context, where `uv` and the venv live.
+  `-TaskAtStartup` registers an at-boot task as SYSTEM instead, which is headless
+  but cannot see a user-scoped venv.
+- In-memory state (`awaiting_key`, confirm nonces) is lost when the task restarts,
+  same as on Linux.
+
 ## Commands
 
 | Command | Effect |

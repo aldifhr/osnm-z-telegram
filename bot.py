@@ -1168,7 +1168,37 @@ async def guard(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         raise ApplicationHandlerStop
 
 
+def _configure_logging() -> None:
+    """Send logs to stderr and to a rotating file next to the app.
+
+    On Linux systemd already captures stderr into the journal, but a scheduled
+    task on Windows runs hidden with no console, so stdout would be discarded
+    and a failure would be undiagnosable. The file handler is what makes
+    Get-ScheduledTaskInfo and the log tail useful there.
+    """
+    pylogging.basicConfig(
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    try:
+        from logging.handlers import RotatingFileHandler
+
+        log_dir = Path(__file__).resolve().parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            log_dir / "bot.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(
+            pylogging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+        )
+        pylogging.getLogger().addHandler(handler)
+    except OSError:
+        # A read-only checkout is not a reason to refuse to start; stderr still works.
+        pylogging.getLogger().debug("file logging unavailable", exc_info=True)
+
+
 def main() -> None:
+    _configure_logging()
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set")

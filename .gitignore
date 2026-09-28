@@ -16,3 +16,7 @@ __pycache__/
 .uv-cache/
 .tmp/
 uv.lock
+
+# Runtime logs (may contain request details)
+logs/
+bot/logs/

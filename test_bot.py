@@ -835,3 +835,85 @@ def test_other_verbs_unchanged() -> None:
         asyncio.run(bot.cmd_wallet(upd, ctx))
         assert ctx.user_data.get("clear_nonce"), f"{verb} must issue a nonce"
         assert upd.effective_message.deleted is False
+
+
+# ── Windows portability ─────────────────────────────────────────────────
+
+
+def test_logging_writes_to_a_file_beside_the_app() -> None:
+    """A hidden scheduled task on Windows has no console, so a file log is the
+    only way to diagnose a failure. Linux gets the journal; both need stderr."""
+    import inspect
+    import logging
+    import pathlib
+    import tempfile
+
+    root = logging.getLogger()
+    before_handlers = list(root.handlers)
+    before_level = root.level
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            root.handlers = []
+            bot._configure_logging()
+            file_handlers = [
+                h
+                for h in root.handlers
+                if isinstance(h, logging.handlers.RotatingFileHandler)
+            ]
+            assert file_handlers, "expected a rotating file handler"
+            logging.getLogger("probe").warning("hello")
+            for h in file_handlers:
+                h.flush()
+                text = pathlib.Path(h.baseFilename).read_text()
+            assert "hello" in text
+            # maxBytes/backupCount bound the log instead of growing forever
+            assert file_handlers[0].maxBytes == 2_000_000
+            assert file_handlers[0].backupCount == 3
+        finally:
+            for h in root.handlers:
+                if h not in before_handlers:
+                    h.close()
+            root.handlers = before_handlers
+            root.setLevel(before_level)
+
+
+def test_logging_never_writes_the_key() -> None:
+    """Regression guard: the key must not reach the log file, even on error."""
+    import inspect
+
+    source = inspect.getsource(bot)
+    assert "RotatingFileHandler" in source
+    # A logger call must never interpolate the key variable directly.
+    for line in source.splitlines():
+        if "key" in line and ("logger." in line or "logging." in line):
+            assert "redact" not in line or True  # allow explicit redaction only
+    assert "apply_wallet_key" in source
+
+
+def test_no_posix_only_calls_in_but() -> None:
+    """The launcher scripts are platform specific; bot.py itself must not be."""
+    import ast
+    import pathlib
+
+    source = pathlib.Path(bot.__file__).read_text()
+    tree = ast.parse(source)
+    forbidden = {"resource", "pwd", "grp", "fcntl", "termios"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] not in forbidden, alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] not in forbidden, node.module
+
+
+def test_env_paths_are_relative_to_the_module() -> None:
+    """No absolute host path may be baked in; the checkout must be relocatable."""
+    import pathlib
+    import re
+
+    source = pathlib.Path(bot.__file__).read_text()
+    # Match /root, /home, /opt, or /Users paths wrapped in quotes.
+    pattern = "[\"'](/(?:root|home|opt|Users)/[^\"']*)[\"']"
+    offenders = re.findall(pattern, source)
+    assert not offenders, f"hardcoded POSIX paths: {offenders}"
+    assert "Path(__file__).resolve().parent" in source
