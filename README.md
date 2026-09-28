@@ -55,7 +55,7 @@ git clone https://github.com/zunmax/osnm-z.git
 cd osnm-z
 uv sync --frozen --python 3.12
 cp .env.example .env
-chmod 600 .env            # holds WALLET_KEY
+chmod 600 .env            # holds WALLET_KEY; a plain cp leaves it world-readable
 
 # 2. Fill in WALLET_KEY and RPC_URL for your target chain
 nano .env
@@ -81,6 +81,7 @@ chmod 600 bot.env
 ```bash
 uv pip install -r requirements-bot.txt   # into the osnm-z venv
 uv pip install pytest                    # test-only
+cp -r osnmzbot osnm-z/bot/
 mv bot.py supply.py test_bot.py run-bot.sh requirements-bot.txt osnm-z/bot/
 cp systemd/osnm-z-bot.service /etc/systemd/system/
 sed -i "s#/opt/osnm-z#$PWD/osnm-z#g" /etc/systemd/system/osnm-z-bot.service
@@ -152,6 +153,42 @@ Three things to keep in mind:
   but cannot see a user-scoped venv.
 - In-memory state (`awaiting_key`, confirm nonces) is lost when the task restarts,
   same as on Linux.
+
+## Layout
+
+`bot.py` is a facade over the `osnmzbot` package. One concern per module, and
+the modules that can be reused from another front-end are free of Telegram
+imports:
+
+| Module | Concern | Reusable outside a bot |
+|---|---|---|
+| `osnmzbot/config` | app paths, chain registry, config loading | yes |
+| `osnmzbot/locator` | is this message a collection reference? | yes |
+| `osnmzbot/render` | message text and price formatting | yes, no I/O |
+| `osnmzbot/onchain` | direct `eth_call` reads | yes |
+| `osnmzbot/models` | the in-flight mint `Session` | yes |
+| `osnmzbot/locks` | process-wide state | yes |
+| `osnmzbot/text` | user-facing copy | yes |
+| `osnmzbot/wallet` | reading the wallet, persisting a key | Telegram-free, but touches `.env` |
+| `osnmzbot/flows` | session lifecycle | needs Telegram |
+| `osnmzbot/handlers` | command and callback handlers | needs Telegram |
+| `osnmzbot/app` | logging setup, handler registration | entry point |
+
+```python
+from osnmzbot.locator import looks_like_locator
+from osnmzbot.config import load, app_dir
+```
+
+Two details worth knowing if you extend this:
+
+- `app_dir()` is a function, not the `APP_DIR` constant. A constant is frozen at
+  import time, which makes redirecting the env files in a test impossible
+  without patching every module that reads them. Use `set_app_dir()` to point
+  the bot at a scratch root and `set_app_dir(None)` to restore.
+- `config.APP_DIR` walks up three levels from `osnmzbot/config.py`. Getting that
+  wrong points the mint library at `bot/.env`, which it rejects for holding
+  `TELEGRAM_*` keys, so the bot fails with a config error that looks unrelated
+  to the path. A test asserts the right directory.
 
 ## Commands
 
@@ -241,6 +278,9 @@ uv run --frozen --no-sync python -m pytest bot/test_bot.py -q
 fails at import with `ModuleNotFoundError: No module named 'telegram'`.
 
 Verified end-to-end from clean `git clone`s of both repos on Python 3.12.13.
+
+The test suite runs against a real checkout, not a mock: `uv sync --frozen`,
+then `pytest bot/test_bot.py` gives 94 passed on a clean clone of both repos.
 
 `test_bot.py` builds sessions from the upstream dataclasses field-for-field rather
 than mocking, so an upstream shape change fails the tests instead of crashing in

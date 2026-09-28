@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
 import re
 import sys
 import tempfile
@@ -495,10 +496,20 @@ def test_atomic_write_leaves_no_temp_file(tmp_path) -> None:
 
 
 def test_app_env_is_private_on_disk() -> None:
+    # Asserts the mode _atomic_write_env leaves behind, not whatever the
+    # operator happened to have on the live file: a fresh checkout copies
+    # .env.example with a plain cp, so the fixture starts 0644 and the writer
+    # is what has to fix it.
     import stat as statmod
+    import tempfile
 
-    mode = statmod.S_IMODE((bot.APP_DIR / ".env").stat().st_mode)
-    assert mode & 0o077 == 0, f".env is group/world readable: {oct(mode)}"
+    with tempfile.TemporaryDirectory() as tmp:
+        env = pathlib.Path(tmp) / ".env"
+        env.write_text("WALLET_KEY=0xold\n")
+        env.chmod(0o644)
+        bot._atomic_write_env(env, "WALLET_KEY", "0x" + "ab" * 32)
+        mode = statmod.S_IMODE(env.stat().st_mode)
+        assert mode & 0o077 == 0, f".env is group/world readable: {oct(mode)}"
 
 
 def test_pending_key_is_checked_before_slug_filter() -> None:
@@ -537,14 +548,15 @@ def test_wallet_status_dedupes_chains() -> None:
 
     urls = ["https://a.example", "https://b.example", "https://c.example"]
     chains = [8453, 8453, 1]
-    original = bot.ChainGateway
     import itertools
     counter = itertools.cycle(chains)
-    bot.ChainGateway = lambda *a, **k: FakeGateway(next(counter))
+    gateway_module = sys.modules[bot.wallet_status_text.__module__]
+    original = gateway_module.ChainGateway
+    gateway_module.ChainGateway = lambda *a, **k: FakeGateway(next(counter))
     try:
         text = asyncio.run(bot.wallet_status_text())
     finally:
-        bot.ChainGateway = original
+        gateway_module.ChainGateway = original
     assert text.count("(8453)") == 1, text
     assert text.count("(1)") == 1, text
 
@@ -614,7 +626,7 @@ def test_wallet_clear_ignores_any_other_token() -> None:
     scratch.write_text(real.read_text())
     original_dir = bot.APP_DIR
     try:
-        bot.APP_DIR = scratch.parent
+        bot.set_app_dir(scratch.parent)
         bot._atomic_write_env(scratch, "WALLET_KEY", "")  # sentinel write
         scratch.write_text("WALLET_KEY=0x" + "11" * 32 + "\n")
         upd, ctx = Upd("wclear:no"), Ctx()
@@ -623,7 +635,7 @@ def test_wallet_clear_ignores_any_other_token() -> None:
         # The key must survive a refused wipe.
         assert "0x" + "11" * 32 in scratch.read_text()
     finally:
-        bot.APP_DIR = original_dir
+        bot.set_app_dir(None)
         scratch.unlink(missing_ok=True)
 
 
@@ -684,7 +696,7 @@ def test_clear_handler_rejects_replayed_token() -> None:
         scratch.write_text((bot.APP_DIR / ".env").read_text())
         original_dir, original_key = bot.APP_DIR, bot.APP_DIR / ".env"
         try:
-            bot.APP_DIR = pathlib.Path(tmp)
+            bot.set_app_dir(pathlib.Path(tmp))
             text, ctx = run("wclear:goodone", {"clear_nonce": "goodone"})
             assert "dikosongkan" in text
             assert "clear_nonce" not in ctx.user_data
@@ -695,7 +707,7 @@ def test_clear_handler_rejects_replayed_token() -> None:
             assert "sudah" in text2
             assert "WALLET_KEY=\n" in scratch.read_text()
         finally:
-            bot.APP_DIR = original_dir
+            bot.set_app_dir(None)
             assert original_key.exists()
 
 
@@ -708,12 +720,12 @@ def test_wallet_status_gives_action_when_key_missing() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         d = pathlib.Path(tmp)
         (d / ".env").write_text("RPC_URL=https://x.example\n")  # no WALLET_KEY
-        original = bot.APP_DIR
+        original = bot.app_dir()
         try:
-            bot.APP_DIR = d
+            bot.set_app_dir(d)
             text = asyncio.run(bot.wallet_status_text())
         finally:
-            bot.APP_DIR = original
+            bot.set_app_dir(None)
     assert "Wallet belum diisi" in text
     assert "/wallet set" in text
     assert "sed -i" in text
@@ -783,9 +795,9 @@ def test_inline_set_writes_key_and_deletes_message() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         d = pathlib.Path(tmp)
         (d / ".env").write_text((bot.APP_DIR / ".env").read_text())
-        original = bot.APP_DIR
+        original = bot.app_dir()
         try:
-            bot.APP_DIR = d
+            bot.set_app_dir(d)
             upd = _Upd("/wallet set " + account.key.hex())
             ctx = _Ctx(["set", account.key.hex()])
             asyncio.run(bot.cmd_wallet(upd, ctx))
@@ -793,7 +805,7 @@ def test_inline_set_writes_key_and_deletes_message() -> None:
             assert account.key.hex() in (d / ".env").read_text()
             assert account.address in upd.effective_message.replies[0]
         finally:
-            bot.APP_DIR = original
+            bot.set_app_dir(None)
 
 
 def test_inline_set_rejects_bad_key_and_still_deletes() -> None:
@@ -804,9 +816,9 @@ def test_inline_set_rejects_bad_key_and_still_deletes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         d = pathlib.Path(tmp)
         (d / ".env").write_text((bot.APP_DIR / ".env").read_text())
-        original = bot.APP_DIR
+        original = bot.app_dir()
         try:
-            bot.APP_DIR = d
+            bot.set_app_dir(d)
             upd = _Upd("/wallet set not-a-key")
             ctx = _Ctx(["set", "not-a-key"])
             asyncio.run(bot.cmd_wallet(upd, ctx))
@@ -814,7 +826,7 @@ def test_inline_set_rejects_bad_key_and_still_deletes() -> None:
             assert "valid" in upd.effective_message.replies[0]
             assert bot.APP_DIR.joinpath(".env").read_text().count("WALLET_KEY=") == 1
         finally:
-            bot.APP_DIR = original
+            bot.set_app_dir(None)
 
 
 def test_bare_set_still_prompts() -> None:
@@ -846,7 +858,7 @@ def test_logging_never_writes_the_key() -> None:
     """Regression guard: the key must not reach the log file, even on error."""
     import inspect
 
-    source = inspect.getsource(bot)
+    source = inspect.getsource(bot) + inspect.getsource(bot.app)
     assert "RotatingFileHandler" in source
     # A logger call must never interpolate the key variable directly.
     for line in source.splitlines():
@@ -927,3 +939,72 @@ def test_tests_never_write_into_the_real_log_directory() -> None:
         # Creating the file at all is the failure: the redirect must keep the
         # handler in the temp dir rather than the app directory.
         assert not real_log.exists(), "a test created the production log"
+
+
+# ── modular structure ───────────────────────────────────────────────────
+
+
+def test_app_dir_points_at_the_app_root_not_bot() -> None:
+    """Regression: after the split, config.py sits one level deeper, so
+    parent.parent resolved to bot/ and the mint library read bot/.env, which
+    it rejects for holding TELEGRAM_* keys."""
+    from osnmzbot.config import APP_DIR
+
+    assert (APP_DIR / "src").is_dir(), f"APP_DIR should be the app root, got {APP_DIR}"
+    assert (APP_DIR / "bot").is_dir()
+    assert not (APP_DIR / "bot" / "src").exists(), "APP_DIR must not be bot/"
+
+
+def test_set_app_dir_redirects_and_restores() -> None:
+    """Redirection must be reversible, or one test poisons every later test."""
+    import tempfile
+
+    from osnmzbot.config import app_dir, set_app_dir
+
+    real = app_dir()
+    with tempfile.TemporaryDirectory() as tmp:
+        assert set_app_dir(pathlib.Path(tmp)) == pathlib.Path(tmp).resolve()
+        assert app_dir() == pathlib.Path(tmp).resolve()
+    set_app_dir(None)
+    assert app_dir() == real
+
+
+def test_each_module_is_importable_on_its_own() -> None:
+    """A module that only works when another is imported first will break the
+    moment the import order changes."""
+    import importlib
+
+    for name in (
+        "config", "text", "models", "locks", "locator", "onchain",
+        "render", "wallet", "flows", "handlers", "app",
+    ):
+        mod = importlib.import_module(f"osnmzbot.{name}")
+        assert mod.__doc__, f"{name} needs a module docstring"
+
+
+def test_no_module_exceeds_a_reasonable_size() -> None:
+    """A 600-line module is a monolith wearing a package's clothing."""
+    import osnmzbot
+
+    pkg = pathlib.Path(osnmzbot.__file__).parent
+    for path in sorted(pkg.glob("*.py")):
+        lines = len(path.read_text().splitlines())
+        assert lines < 500, f"{path.name} is {lines} lines; split it further"
+
+
+def test_no_star_imports() -> None:
+    """A star import hides which module owns what and defeats linters."""
+    import osnmzbot
+
+    pkg = pathlib.Path(osnmzbot.__file__).parent
+    for path in sorted(pkg.glob("*.py")):
+        for line in path.read_text().splitlines():
+            if "import *" in line and "noqa" not in line:
+                raise AssertionError(f"{path.name} uses a star import: {line.strip()}")
+
+
+def test_facade_reexports_every_public_name() -> None:
+    """bot.py is the compatibility surface; dropping a name breaks callers."""
+    for name in bot.__all__:
+        assert hasattr(bot, name), f"facade is missing {name}"
+    assert len(bot.__all__) == len(set(bot.__all__)), "duplicate entries in __all__"
