@@ -1,0 +1,27 @@
+osnm-z-telegram-bot
+===================
+
+This repository is a standalone Telegram front-end. It contains no minting
+engine of its own.
+
+The minting engine is the upstream project:
+
+    osnm-z — https://github.com/zunmax/osnm-z
+    Copyright (c) osnm-z contributors
+    Licensed under the MIT License
+    Vendored-by-reference at commit b001c82bde34e408ab6f21e6e8be470ca2f189ab
+
+No upstream source is copied into this repository. `bot.py` imports and calls
+`osnm_z` as an installed library, so the MIT notice above must be preserved if
+you redistribute anything derived from it.
+
+Bot layer written for this project. Same MIT license, see LICENSE.
+
+Third-party runtime dependencies (all MIT/BSD/Apache, see their own projects):
+  python-telegram-bot 21.11   https://python-telegram-bot.org
+  httpx 0.28.1               https://www.python-httpx.org
+  orjson 3.11.9              https://github.com/ijl/orjson
+  pydantic, tenacity, eth-*, eth-account   see upstream uv.lock for exact pins
+
+On-chain contracts referenced at runtime (not vendored, called over JSON-RPC):
+  OpenSea SeaDrop singleton  0x00005EA00Ac477B1030CE78506496e8C2dE24bf5

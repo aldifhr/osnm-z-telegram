@@ -64,7 +64,6 @@ nano .env
 cd ..
 git clone <this-repo> osnm-z-telegram-bot
 cd osnm-z-telegram-bot
-uv pip install "python-telegram-bot==21.11"
 
 # 4. Bot credentials — kept in a separate file, see "Two env files"
 cat > bot.env <<'EOF'
@@ -80,9 +79,11 @@ chmod 600 bot.env
 `../src` resolves the upstream package:
 
 ```bash
-mv bot.py supply.py test_bot.py run-bot.sh osnm-z/bot/
+uv pip install -r requirements-bot.txt   # into the osnm-z venv
+uv pip install pytest                    # test-only
+mv bot.py supply.py test_bot.py run-bot.sh requirements-bot.txt osnm-z/bot/
 cp systemd/osnm-z-bot.service /etc/systemd/system/
-sed -i 's#/root/tools/osnm-z#'"$PWD"/osnm-z'#g' /etc/systemd/system/osnm-z-bot.service
+sed -i "s#/opt/osnm-z#$PWD/osnm-z#g" /etc/systemd/system/osnm-z-bot.service
 systemctl daemon-reload && systemctl enable --now osnm-z-bot
 ```
 
@@ -177,9 +178,15 @@ on a public RPC.
 ## Testing
 
 ```bash
-uv run --frozen --no-sync python -m pytest test_bot.py -q
+uv run --frozen --no-sync python -m pytest bot/test_bot.py -q
 # 84 passed
 ```
+
+`uv sync --frozen` installs the upstream lockfile only. `python-telegram-bot` and
+`pytest` are **not** in it — install from `requirements-bot.txt` first, or the bot
+fails at import with `ModuleNotFoundError: No module named 'telegram'`.
+
+Verified end-to-end from clean `git clone`s of both repos on Python 3.12.13.
 
 `test_bot.py` builds sessions from the upstream dataclasses field-for-field rather
 than mocking, so an upstream shape change fails the tests instead of crashing in

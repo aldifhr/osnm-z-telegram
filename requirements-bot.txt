@@ -1,0 +1,7 @@
+# Telegram-layer dependencies, on top of the upstream osnm-z lockfile.
+#
+#   uv pip install -r requirements-bot.txt
+#   uv pip install pytest            # test-only
+#
+# Pinned exactly, matching the repo's no-floating-deps policy.
+python-telegram-bot==21.11
