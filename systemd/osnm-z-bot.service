@@ -1,0 +1,25 @@
+[Unit]
+Description=osnm-z Telegram mint bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# Set WorkingDirectory to the osnm-z checkout, e.g.
+#   WorkingDirectory=/opt/osnm-z
+# bot.py must live in <checkout>/bot/ so that ../src resolves the upstream package.
+WorkingDirectory=/opt/osnm-z
+ExecStart=/opt/osnm-z/bot/run-bot.sh
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# The app tree holds the wallet key, so keep the unit narrow.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/osnm-z
+
+[Install]
+WantedBy=multi-user.target
