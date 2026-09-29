@@ -329,9 +329,34 @@ executes as the zero address, where SeaDrop sees an empty allowlist and no quota
 use. An eligible wallet would be reported ineligible, and an exhausted one would
 pass.
 
-Gas is only priced exactly when fees are manual (`FEES_MANUAL=true` plus
-`MAX_FEE_PER_GAS`). With automatic fees the price is only knowable at signing
-time, so the report says nothing about affordability rather than guessing.
+Gas is priced exactly only when fees are manual. With automatic fees the price
+is only knowable at signing time, so the report says nothing about
+affordability rather than guessing.
+
+Manual mode has a trap worth stating: `FEE_AUTOMATIC=true` is **rejected** if
+`MAX_FEE_PER_GAS_GWEI` or `MAX_PRIORITY_FEE_PER_GAS_GWEI` is present, so the
+commented-out example lines in `.env.example` have to be deleted, not just
+edited. All three settings change together:
+
+```bash
+FEE_AUTOMATIC=false
+MAX_FEE_PER_GAS_GWEI=0.05
+MAX_PRIORITY_FEE_PER_GAS_GWEI=0.01
+```
+
+Pick the cap from the chain you actually mint on rather than copying the example.
+On Base the live base fee is around 0.005 gwei, so 0.05 gwei is roughly 8x
+headroom; the 1.5 gwei in `.env.example` is 300x this chain's real price and
+reserves enormously more than it needs to. Check before you set it:
+
+```bash
+curl -s -X POST "$RPC_URL" -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_gasPrice","params":[]}'
+```
+
+The trade-off of a manual cap is that if the base fee rises past it, the
+transaction is unminable until it drops again. The cap has to sit above the
+base fee with room to spare, not just above the current tip.
 
 ## Owner-only enforcement
 
