@@ -20,7 +20,9 @@ ever parsed, and no minting behaviour is reimplemented here.
 | Mint stages, eligibility, calldata, signing, broadcast, receipt | [`zunmax/osnm-z`](https://github.com/zunmax/osnm-z) |
 | Chain auto-detection across 6 networks | `osnmzbot/config.py` |
 | Live `totalSupply()` progress, price/gas/balance breakdown | `osnmzbot/onchain.py`, `osnmzbot/render.py` |
-| Telegram UI, key handling, confirmations | `osnmzbot/handlers.py`, `osnmzbot/wallet.py` |
+| `/status`: receipt, confirmations, revert vs dropped | `osnmzbot/status.py`, `osnmzbot/onchain.py` |
+| Dry run: calldata + `eth_call`, never signs | `osnmzbot/simulate.py` |
+| Telegram UI, key handling, confirmations | `osnmzbot/commands.py`, `osnmzbot/callbacks.py` |
 
 ## Features
 
@@ -100,7 +102,7 @@ Verify:
 
 ```bash
 cd ../osnm-z
-uv run --frozen --no-sync python -m pytest bot/test_bot.py -q   # 97 passed
+uv run --frozen --no-sync python -m pytest bot/ -q   # 120 passed
 systemctl status osnm-z-bot
 tail -f bot/logs/bot.log
 ```
@@ -210,8 +212,12 @@ modules reusable from another front-end import no Telegram types at all:
 | `osnmzbot/wallet` | reading the wallet, persisting a key | yes, but touches `.env` |
 | `osnmzbot/config` | app paths, chain registry, config loading | yes |
 | `osnmzbot/render` | message text and price formatting | yes, no I/O |
+| `osnmzbot/simulate` | dry-run a mint, never signs | yes, no Telegram |
+| `osnmzbot/status` | tx receipt tracking and reporting | yes, no Telegram |
 | `osnmzbot/flows` | session lifecycle | no |
-| `osnmzbot/handlers` | Telegram command and callback handlers | no |
+| `osnmzbot/commands` | `/mint`, `/wallet`, `/status`, … | no |
+| `osnmzbot/callbacks` | inline buttons, mint broadcast | no |
+| `osnmzbot/handlers` | wallet commands, owner guard, re-exports | no |
 
 ```python
 from osnmzbot.locator import looks_like_locator
@@ -266,11 +272,66 @@ not.
 | `/wallet set <key>` | Replace the private key (the command message is deleted) |
 | `/wallet clear` | Empty the key — requires an inline confirmation tap |
 | `/doctor` | Config, wallet, RPC, and OpenSea client checks |
+| `/status` | Where the last mint got to: pending, mined, reverted, or dropped |
 | `/cancel` | Abandon the current session |
 
 `/wallet set` accepts the key inline, or prompts for it if you send the bare
 command. Both paths delete the message first and route through the same
 `apply_wallet_key()`.
+
+## `/status` — what happened to my transaction
+
+Reads the receipt of the last broadcast mint. It exists because a transaction
+link is not an answer: the four outcomes below need different responses from
+you, and none of them can be told apart by looking at a block explorer.
+
+| State | Meaning | What to do |
+|---|---|---|
+| `succeeded` | Mined with status 1, confirmations counted from the chain head | Nothing |
+| `reverted` | Mined with status 0. **The gas is spent** and no NFT arrived | Stop; do not retry blindly |
+| `pending` | No receipt yet, still young | Wait |
+| `dropped` | No receipt after 300s, so the node probably dropped it from the mempool | The nonce was never consumed and no gas was spent, so a retry is still valid |
+
+The confirmation count is `head - block + 1`, read live, so a transaction mined
+recently shows a low number and climbs. `dropped` is deliberately distinct from
+`reverted`: a dropped transaction cost nothing, and calling that a failure would
+push you into paying gas twice for the same NFT.
+
+One transaction is tracked per chat, the most recent. The record outlives the
+mint session, because `on_go` closes the session as soon as the transaction is
+sent. It stores the RPC endpoint that actually broadcast the transaction, since
+another endpoint may report no receipt for a transaction that has already mined.
+
+State is in memory, so a restart forgets it. A tx that is still in flight when
+the service restarts is still visible on any explorer, just not through `/status`.
+
+## Dry run — simulate before spending gas
+
+The confirm screen offers **🧪 Simulasi dulu** next to **MINT**. The simulation
+builds the exact calldata that would be sent and runs it as an `eth_call` against
+pending state, then reports calldata, value, worst-case gas, balance, and whether
+the wallet can afford it.
+
+It never signs and never broadcasts. A structural test greps `simulate.py` for
+`sign_transaction`, `broadcast_signed`, and `eth_sendRawTransaction` and fails if
+any of them appear, so the no-signing property is enforced by the suite rather
+than by review.
+
+It catches two failures the OpenSea availability flag cannot show you, because
+that flag is a cache and says nothing about your specific wallet:
+
+- **Per-wallet quota exhausted** while the stage still looks open
+- **An allowlist (GTD) that does not contain your address**
+
+The simulation sends its own `eth_call` rather than reusing the upstream
+`contract_call()`. That is not a preference: `contract_call()` omits `from`, so it
+executes as the zero address, where SeaDrop sees an empty allowlist and no quota
+use. An eligible wallet would be reported ineligible, and an exhausted one would
+pass.
+
+Gas is only priced exactly when fees are manual (`FEES_MANUAL=true` plus
+`MAX_FEE_PER_GAS`). With automatic fees the price is only knowable at signing
+time, so the report says nothing about affordability rather than guessing.
 
 ## Owner-only enforcement
 
