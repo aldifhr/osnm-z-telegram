@@ -49,3 +49,27 @@ class Session:
         if CHAT_LOCK.locked():
             CHAT_LOCK.release()
 
+
+@dataclass(slots=True)
+class TrackedMint:
+    """A broadcast mint, kept after the session is torn down.
+
+    on_go closes the session as soon as the transaction is sent, so the only way
+    /status can answer "did it land" is if the tx outlives the session. One
+    record per chat: the newest supersedes the last, because a chat that has
+    already moved on has no interest in the previous mint.
+    """
+
+    transaction_hash: str
+    chain_id: int
+    rpc_url: str
+    stage_name: str
+    quantity: int
+    sent_at: float  # time.monotonic at broadcast, not wall clock
+    simulated: bool = False
+
+    def age_seconds(self) -> float:
+        import time
+
+        return max(0.0, time.monotonic() - self.sent_at)
+

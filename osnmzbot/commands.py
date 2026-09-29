@@ -1,9 +1,4 @@
-"""Wallet commands, the owner guard, and the error handler.
-
-Re-exports the command and callback handlers so app.py and any test that
-imported them from here keep working: the split is an internal layout change,
-not an API change.
-"""
+"""Slash commands: /start /help /wallet /cancel /doctor /mint /status."""
 
 from __future__ import annotations
 
@@ -12,29 +7,39 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
-import logging as pylogging
 import secrets
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
-from telegram.ext import ApplicationHandlerStop, ContextTypes
+from telegram.ext import ContextTypes
 
 from osnm_z.config import ConfigError
+from osnm_z.command import run_diagnostics
 
-from .config import app_dir, OWNER_ID, load
+from .locks import CHAT_LOCK
+from .text import HELP
+from .wallet import apply_wallet_key
+from .models import TrackedMint
+from .flows import begin_session
+from .status import build_gateway
+from .status import describe
 from .flows import drop_session
-from .models import Session
 from .render import esc
-from .wallet import (apply_wallet_key, on_wallet_key, _atomic_write_env,
-                     wallet_status_text)
+from .config import load
+from .status import track_status
+from .wallet import wallet_status_text
 
-# Re-exported for compatibility with the pre-split import path.
-from .callbacks import (  # noqa: F401
-    on_cancel, on_go, on_link, on_no, on_phase, on_quantity, on_simulate)
-from .commands import (  # noqa: F401
-    cmd_cancel, cmd_doctor, cmd_help, cmd_mint, cmd_start, cmd_status)
 
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        HELP, parse_mode=ParseMode.MARKDOWN
+    )
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        HELP, parse_mode=ParseMode.MARKDOWN
+    )
 
 async def cmd_wallet(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """/wallet — show the active wallet and how to change it."""
@@ -105,74 +110,68 @@ async def cmd_wallet(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ),
     )
 
-async def on_wallet_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Confirmed wipe of WALLET_KEY — single use, and never on an empty key.
+async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    drop_session(ctx)
+    was_awaiting = ctx.user_data.pop("awaiting_key", None)
+    await update.effective_message.reply_text(
+        "Sesi dibatalkan." if not was_awaiting else "Batal. Wallet tidak diubah."
+    )
 
-    The callback token is a one-shot nonce, so an old confirmation button that
-    is tapped again (or after a new key was set) does nothing. Wiping an
-    already-empty key is reported, not re-reported as a new wipe.
-    """
-    query = update.callback_query
-    await query.answer()
-    token = query.data.split(":", 1)[1] if ":" in query.data else ""
-    if not token or ctx.user_data.get("clear_nonce") != token:
-        await query.edit_message_text(
-            "Tombol ini sudah dipakai atau kedaluwarsa. "
-            "Ketik `/wallet clear` lagi kalau mau.",
+async def cmd_doctor(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if CHAT_LOCK.locked():
+        await message.reply_text("⏳ Ada mint yang jalan. Tunggu selesai dulu.")
+        return
+    async with CHAT_LOCK:
+        try:
+            loaded = load()
+        except ConfigError as error:
+            await message.reply_text(f"❌ Config: {esc(error)}")
+            return
+        note = await message.reply_text("⏳ Mengecek config, wallet, RPC…")
+        try:
+            await run_diagnostics(loaded.app, loaded.signer)
+        except Exception as error:  # noqa: BLE001 - surface anything to the operator
+            await note.edit_text(f"❌ Doctor gagal: `{esc(error)}`")
+            return
+        await note.edit_text(
+            "✅ *Doctor OK*\n"
+            f"Wallet: `{esc(loaded.signer.identity.address)}`\n"
+            f"RPC: `{esc(loaded.app.rpc_url)}`\n"
+            f"Gas limit: `{loaded.app.gas_limit}`\n\n"
+            "Now broadcast tx: `/mint <link>`",
             parse_mode=ParseMode.MARKDOWN,
         )
-        return
-    ctx.user_data.pop("clear_nonce", None)
-    drop_session(ctx)
-    try:
-        current = load().signer
-    except ConfigError as error:
-        await query.edit_message_text(
-            f"Key sudah kosong. ({esc(error)})", parse_mode=ParseMode.MARKDOWN
+
+async def cmd_mint(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await begin_session(update, ctx, " ".join(ctx.args).strip())
+
+async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/status — where did my last mint go?
+
+    Reads the receipt instead of linking an explorer and hoping. A mined
+    transaction with status 0 is reported as reverted (gas spent, nothing
+    received), which is a different problem from a transaction that never
+    landed (no gas spent, safe to retry).
+    """
+    tracked: TrackedMint | None = ctx.user_data.get("tracked")
+    if tracked is None:
+        await update.effective_message.reply_text(
+            "Belum ada tx yang dilacak. Bot belum pernah broadcast mint buat lo."
         )
         return
-    _atomic_write_env(app_dir() / ".env", "WALLET_KEY", "")
-    await query.edit_message_text(
-        "🗑 `WALLET_KEY` dikosongkan. Bot nggak bisa mint sampai diisi lagi.\n\n"
-        "Isi ulang dengan `/wallet set`.",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    try:
+        loaded = load()
+    except ConfigError as error:
+        await update.effective_message.reply_text(f"❌ Config error: `{esc(error)}`")
+        return
 
-async def on_wallet_set_button(
-    update: Update, ctx: ContextTypes.DEFAULT_TYPE
-) -> None:
-    query = update.callback_query
-    await query.answer()
-    ctx.user_data["awaiting_key"] = True
-    await query.edit_message_text(
-        "Kirim private key (64 hex, `0x` opsional).\n\n"
-        "⚠️ Key lewat server Telegram. Bot akan HAPUS pesan lo "
-        "begitu diterima. Ketik /cancel untuk batal.",
-        parse_mode=ParseMode.MARKDOWN,
+    gateway = build_gateway(loaded)
+    try:
+        await gateway.__aenter__()
+        result = await track_status(gateway, tracked)
+    finally:
+        await gateway.__aexit__(None, None, None)
+    await update.effective_message.reply_text(
+        describe(tracked, result), parse_mode=ParseMode.MARKDOWN
     )
-
-async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    pylogging.exception("unhandled", exc_info=ctx.error)
-    session: Session | None = ctx.user_data.get("session")
-    if session is not None:
-        await session.close()
-    chat_id = ctx.user_data.get("chat_id") or getattr(
-        getattr(update, "effective_chat", None), "id", None
-    )
-    if chat_id:
-        try:
-            await ctx.bot.send_message(
-                chat_id, f"❌ Error: `{esc(ctx.error)}`", parse_mode=ParseMode.MARKDOWN
-            )
-        except (Forbidden, BadRequest):
-            pass
-
-async def guard(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Owner-only. Runs in group -1 so it sees every update first."""
-    chat = update.effective_chat
-    if chat is not None and chat.id != OWNER_ID:
-        try:
-            await chat.send_message("Unauthorized.")
-        except (Forbidden, BadRequest):
-            pass
-        raise ApplicationHandlerStop

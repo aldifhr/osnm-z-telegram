@@ -15,6 +15,12 @@ import os
 import re
 from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import Any
+
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.error import BadRequest, Forbidden
+from telegram.ext import ContextTypes
 
 from osnm_z import chain as _chain
 
@@ -103,3 +109,50 @@ async def wallet_status_text() -> str:
         lines.append(f"• {name} ({chain_id}): `{pretty}`")
     return "\n".join(lines)
 
+
+
+async def on_wallet_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Receive a pasted key: delete the message, never echo or log it."""
+    message = update.effective_message
+    raw = (message.text or "").strip()
+    # Remove the key from the chat immediately, before anything else.
+    try:
+        await message.delete()
+    except (Forbidden, BadRequest):
+        pass
+    ctx.user_data.pop("awaiting_key", None)
+    await apply_wallet_key(message, ctx, raw)
+
+async def apply_wallet_key(message: Any, ctx: ContextTypes.DEFAULT_TYPE, raw: str) -> None:
+    """Validate, persist, and report one private key. Never echoes the key."""
+    key = raw[2:] if raw.lower().startswith("0x") else raw
+    if len(key) != 64 or any(c not in "0123456789abcdefABCDEF" for c in key):
+        await message.reply_text(
+            "❌ Bukan private key yang valid. Harus 64 karakter hex. "
+            "Pesan lo sudah dihapus dari chat.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    try:
+        _atomic_write_env(app_dir() / ".env", "WALLET_KEY", f"0x{key}")
+    except Exception as error:  # noqa: BLE001
+        await message.reply_text(
+            f"❌ Gagal menulis .env: `{esc(error)}`", parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    try:
+        loaded = load()
+        address = loaded.signer.identity.address
+    except ConfigError as error:
+        await message.reply_text(
+            f"❌ Key tersimpan tapi config nggak bisa dibaca: `{esc(error)}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    await message.reply_text(
+        "✅ *Wallet diganti*\n"
+        f"Address: `{address}`\n"
+        f"Key: `{app_dir() / '.env'}` (600, tidak pernah ditampilkan)\n\n"
+        "💰 Cek saldo dengan `/wallet`. Key lo sudah dihapus dari chat ini.",
+        parse_mode=ParseMode.MARKDOWN,
+    )

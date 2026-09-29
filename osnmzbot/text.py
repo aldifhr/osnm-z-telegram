@@ -14,6 +14,7 @@ HELP = (
     "/wallet — address aktif + saldo per chain\n"
     "/wallet set <key> — ganti private key (pesan lo dihapus)\n"
     "/wallet clear — kosongkan key (perlu konfirmasi)\n"
+    "/status — cek tx mint terakhir (pending/revert/sukses)\n"
     "/cancel — batalkan sesi\n\n"
     "Bot nampilin daftar phase, lo pilih pake tombol, "
     "qty, konfirmasi, baru tx dikirim."

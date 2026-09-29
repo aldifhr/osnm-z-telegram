@@ -61,6 +61,37 @@ SHOULD_NOT_TRIGGER = [
 
 
 @pytest.mark.parametrize("text", SHOULD_TRIGGER)
+
+def _has_usable_wallet_key() -> bool:
+    """True only when the checkout holds a real key, not the example placeholder.
+
+    A fresh clone copies .env.example, whose WALLET_KEY is "0x<64-...key>". The
+    signer rejects that, so every test which builds a real WalletSigner would
+    fail on a fresh install for a reason unrelated to the code under test. Skip
+    them there instead of shipping a suite that cannot pass from a clean clone.
+    """
+    import osnmzbot
+
+    try:
+        value = osnmzbot.config.app_dir().joinpath(".env").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    match = re.search(r"^WALLET_KEY=(.*)$", value, re.MULTILINE)
+    if not match:
+        return False
+    key = match.group(1).strip()
+    if key.lower().startswith("0x"):
+        key = key[2:]
+    return len(key) == 64 and all(c in "0123456789abcdefABCDEF" for c in key)
+
+
+_needs_usable_wallet_key = pytest.mark.skipif(
+    not _has_usable_wallet_key(),
+    reason="the checkout has no real WALLET_KEY (fresh install from .env.example)",
+)
+
+
+@pytest.mark.parametrize("text", SHOULD_TRIGGER)
 def test_filter_accepts_valid_locators(text: str) -> None:
     assert bot.looks_like_locator(text) is True
 
@@ -265,6 +296,7 @@ def test_single_selectable_stage_is_detected() -> None:
     assert len(picks) == 1
 
 
+@_needs_usable_wallet_key
 def test_render_quantity_text_shows_price_and_wallet() -> None:
     session = _sample_session()
     session.loaded = bot.load()
@@ -303,6 +335,7 @@ def test_format_native_trims_and_labels() -> None:
     assert bot.format_native(10**18, 4663) == "1 Robinhood"
 
 
+@_needs_usable_wallet_key
 def test_price_table_shows_unit_and_max() -> None:
     session = _sample_session()
     session.loaded = bot.load()
@@ -315,6 +348,7 @@ def test_price_table_shows_unit_and_max() -> None:
     assert "total maks" in text
 
 
+@_needs_usable_wallet_key
 def test_price_table_flags_insufficient_balance() -> None:
     session = _sample_session()
     session.loaded = bot.load()
@@ -326,6 +360,7 @@ def test_price_table_flags_insufficient_balance() -> None:
     assert "0.0005" in text
 
 
+@_needs_usable_wallet_key
 def test_price_table_confirms_sufficient_balance() -> None:
     session = _sample_session()
     session.loaded = bot.load()
@@ -337,6 +372,7 @@ def test_price_table_confirms_sufficient_balance() -> None:
     assert "Saldo kurang" not in text
 
 
+@_needs_usable_wallet_key
 def test_price_table_survives_missing_balance() -> None:
     session = _sample_session()
     session.loaded = bot.load()
@@ -533,6 +569,7 @@ def test_clear_key_empties_value(tmp_path) -> None:
     assert "WALLET_KEY=\n" in env.read_text()
 
 
+@_needs_usable_wallet_key
 def test_wallet_status_dedupes_chains() -> None:
     """Two RPCs for Base must not print the same balance twice."""
     import asyncio
@@ -658,6 +695,7 @@ def test_clear_handler_is_single_use() -> None:
     assert "load().signer" in source, "must detect an already-empty key"
 
 
+@_needs_usable_wallet_key
 def test_clear_handler_rejects_replayed_token() -> None:
     import asyncio
 
@@ -1042,3 +1080,50 @@ def test_no_runtime_directories_inside_the_package() -> None:
     pkg = pathlib.Path(osnmzbot.__file__).parent
     for stray in ("logs", ".uv-cache", ".tmp"):
         assert not (pkg / stray).exists(), f"{stray}/ should not live in the package"
+
+
+def test_no_module_has_an_undefined_name() -> None:
+    """A name that no import provides fails at call time, not import time.
+
+    The test suite did not catch this: a handler that nothing in the suite
+    invokes is never executed, so its NameError only shows up in production
+    when the owner taps the button. pyflakes resolves every binding statically,
+    which is the only thing that covers the unreached branches.
+    """
+    import contextlib
+    import io
+    import osnmzbot
+    import pyflakes.api
+    import pyflakes.reporter
+
+    pkg = pathlib.Path(osnmzbot.__file__).parent
+    buf = io.StringIO()
+    # pyflakes 4.0 dropped the reporter callback API: Reporter is now just
+    # (out, err) streams and it prints directly, so capturing the stream is
+    # the only way to read the findings.
+    reporter = pyflakes.reporter.Reporter(buf, buf)
+    with contextlib.redirect_stdout(buf):
+        for path in sorted(pkg.glob("*.py")):
+            pyflakes.api.check(path.read_text(encoding="utf-8"), str(path), reporter)
+    undefined = [ln for ln in buf.getvalue().splitlines() if "undefined name" in ln]
+    assert not undefined, "\n".join(undefined)
+
+
+def test_every_module_imports_cleanly() -> None:
+    """Import each module on its own, to catch import-time cycles.
+
+    A circular import between two modules passes a suite that only ever imports
+    the top-level package, because the cycle resolves the first time round and
+    is cached in sys.modules. Importing each module first, in a fresh
+    interpreter state, is what actually exercises the edge.
+    """
+    import importlib
+    import osnmzbot
+
+    pkg = pathlib.Path(osnmzbot.__file__).parent
+    for path in sorted(pkg.glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        name = f"osnmzbot.{path.stem}"
+        sys.modules.pop(name, None)
+        importlib.import_module(name)

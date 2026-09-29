@@ -114,7 +114,9 @@ if (-not (Test-Path $BotDir -PathType Container)) {
 }
 
 Info 'copying the bot into the checkout'
-foreach ($name in 'bot.py', 'supply.py', 'test_bot.py', 'run-bot.sh', 'run-bot.ps1', 'run-bot.cmd') {
+foreach ($name in 'bot.py', 'supply.py', 'test_bot.py', 'test_status.py',
+                'test_simulate.py', 'test_simulate_ui.py',
+                'run-bot.sh', 'run-bot.ps1', 'run-bot.cmd') {
     $source = Join-Path $ScriptDir $name
     if (Test-Path $source -PathType Leaf) {
         Copy-Item $source (Join-Path $BotDir $name) -Force

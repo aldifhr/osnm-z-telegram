@@ -13,8 +13,9 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 
 from .config import OWNER_ID
 from .handlers import (cmd_cancel, cmd_doctor, cmd_help, cmd_mint, cmd_start,
-    cmd_wallet, error_handler, guard, on_cancel, on_go, on_link, on_no,
-    on_phase, on_quantity, on_wallet_clear, on_wallet_set_button)
+    cmd_status, cmd_wallet, error_handler, guard, on_cancel, on_go, on_link,
+    on_no, on_phase, on_quantity, on_simulate, on_wallet_clear,
+    on_wallet_set_button)
 
 def _log_dir() -> Path:
     """Where the rotating log lives. Overridable via OSNM_Z_LOG_DIR.
@@ -84,6 +85,7 @@ def main() -> None:
     app.add_handler(CommandHandler("doctor", cmd_doctor))
     app.add_handler(CommandHandler("wallet", cmd_wallet))
     app.add_handler(CommandHandler("mint", cmd_mint))
+    app.add_handler(CommandHandler("status", cmd_status))
     # Bare links/slugs/addresses auto-start a session, no command needed.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_link), group=1)
     app.add_handler(CallbackQueryHandler(on_phase, pattern=r"^ph:"))
@@ -92,6 +94,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_no, pattern=r"^no:"))
     app.add_handler(CallbackQueryHandler(on_wallet_set_button, pattern=r"^wset$"))
     app.add_handler(CallbackQueryHandler(on_wallet_clear, pattern=r"^wclear:[A-Za-z0-9_-]+"))
+    app.add_handler(CallbackQueryHandler(on_simulate, pattern=r"^sim:"))
     app.add_handler(CallbackQueryHandler(on_go, pattern=r"^go:"))  # go:q:N and go:<nonce>
     app.add_error_handler(error_handler)
     app.run_polling(drop_pending_updates=True)

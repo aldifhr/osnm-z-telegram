@@ -135,3 +135,53 @@ def supply_status(session: Session) -> str | None:
         return f"\U0001f525 *Hampir habis* — {line}"
     return line
 
+
+
+def render_simulation(report: Any, stage_name: str, chain_id: int) -> str:
+    """Format a dry-run result.
+
+    The verdict line is deliberately explicit about what was and was not done:
+    a green "lolos" here means the eth_call reverted nothing, not that a
+    transaction was sent, and the message has to say so.
+    """
+    if report.error:
+        return (
+            "🧪 *Simulasi gagal*\n"
+            f"Phase: {esc(stage_name)}\n\n"
+            f"`{esc(report.error)}`\n\n"
+            "_Bukan karena tx-nya gagal — simulasinya sendiri yang nggak jalan._"
+        )
+    lines = [
+        "🧪 *Hasil simulasi* — tidak ada tx yang dikirim",
+        f"Phase: {esc(stage_name)}",
+        f"Qty: {report.quantity}",
+    ]
+    if report.calldata:
+        lines.append(
+            f"Calldata: `{report.calldata[:8].hex()}…` ({len(report.calldata)} byte)"
+        )
+    if report.value_wei:
+        lines.append(f"Nilai: `{format_native(report.value_wei, chain_id)}`")
+    if report.fee_estimate_wei is not None:
+        lines.append(f"Gas (maks): `{format_native(report.fee_estimate_wei, chain_id)}`")
+    if report.balance_wei is not None:
+        lines.append(f"Saldo: `{format_native(report.balance_wei, chain_id)}`")
+
+    lines.append("")
+    if report.ok:
+        lines.append("🟢 *Lolos* — eth_call nggak revert.")
+    else:
+        lines.append("🔴 *Gagal* — eth_call revert.")
+        if report.result and report.result.revert_selector:
+            lines.append(f"Error selector: `{report.result.revert_selector}`")
+    if report.affordable is False:
+        lines.append(
+            f"🔴 *Saldo kurang* — kurang `{format_native(report.missing_wei, chain_id)}`"
+        )
+    elif report.affordable is True:
+        lines.append("🟢 Saldo cukup.")
+    lines.append(
+        "\n_Simulasi cuma eth_call: allowlist, quota, dan saldo dicek. "
+        "Gas tetap dibayar kalau lo tekan MINT._"
+    )
+    return "\n".join(lines)
